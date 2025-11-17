@@ -1,0 +1,4107 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Szenen Generator - Login</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .draggable-scene.drag-over {
+            border: 2px dashed #3B82F6;
+            background-color: #EFF6FF;
+        }
+        video {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        .icon {
+            display: inline-block;
+            width: 1em;
+            height: 1em;
+            stroke-width: 0;
+            stroke: currentColor;
+            fill: currentColor;
+        }
+        .draggable-scene {
+            transition: all 0.2s ease;
+        }
+        .draggable-scene:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .drag-handle {
+            cursor: grab;
+        }
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { createRoot } = ReactDOM;
+
+        // Master-Passwort für Admin-Zugang
+        const MASTER_PASSWORD = "123";
+        // Webhook-URLs (aus Version 1 übernommen)
+        const LOGIN_WEBHOOK_URL = "https://n8n.srv793158.hstgr.cloud/webhook/82b68a27-ec9c-43c6-bc3c-d1f5859713c7";
+        const LOGO_UPLOAD_WEBHOOK_URL = "https://n8n.srv793158.hstgr.cloud/webhook/3a90f3c0-fc40-4a63-8dc3-13ee32cd5ba3";
+        const CRM_WEBHOOK_URL = "https://n8n.srv793158.hstgr.cloud/webhook/301184ac-5da6-4792-b88c-fd79d047f45c";
+
+        function VideoGeneratorApp() {
+    const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [currentUser, setCurrentUser] = useState(null);
+    const [showLogin, setShowLogin] = useState(true);
+    const [showLogoUpload, setShowLogoUpload] = useState(false);
+    const [pendingLoginToken, setPendingLoginToken] = useState(null);
+    const [showCrmLoading, setShowCrmLoading] = useState(false);
+    const [crmData, setCrmData] = useState(null);
+    const [templates, setTemplates] = useState({ public: [], clientSpecific: [] });
+    
+    // ✅ Hilfsfunktion für sicheren localStorage Zugriff
+    const safeLocalStorage = {
+        getItem: (key) => {
+            try {
+                return localStorage.getItem(key);
+            } catch {
+                return null;
+            }
+        },
+        setItem: (key, value) => {
+            try {
+                localStorage.setItem(key, value);
+                return true;
+            } catch {
+                console.warn('LocalStorage nicht verfügbar');
+                return false;
+            }
+        }
+    };
+
+    // Webhook-Konfiguration (erweitert von Version 1)
+    const [webhooks, setWebhooks] = useState(() => {
+        const saved = safeLocalStorage.getItem('video-generator-webhooks');
+        let parsedWebhooks = saved ? JSON.parse(saved) : {};
+        
+        if (!parsedWebhooks.login) {
+            parsedWebhooks.login = LOGIN_WEBHOOK_URL;
+        }
+        if (!parsedWebhooks.logoUpload) {
+            parsedWebhooks.logoUpload = LOGO_UPLOAD_WEBHOOK_URL;
+        }
+        if (!parsedWebhooks.crm) {
+            parsedWebhooks.crm = CRM_WEBHOOK_URL;
+        }
+        
+        const defaultWebhooks = {
+            'login': LOGIN_WEBHOOK_URL,
+            'logoUpload': LOGO_UPLOAD_WEBHOOK_URL,
+            'crm': CRM_WEBHOOK_URL,
+            'videoUpload': '',
+            'avatarVideos': '',
+            'aiVideo': '',
+            'merge': '',
+            'designUpdate': '',
+            'creditsCheck': ''
+        };
+        
+        return { ...defaultWebhooks, ...parsedWebhooks };
+    });
+
+    useEffect(() => {
+        safeLocalStorage.setItem('video-generator-webhooks', JSON.stringify(webhooks));
+    }, [webhooks]);
+    
+    // CRM-Daten laden
+    const loadCrmData = async (loginToken) => {
+        setShowCrmLoading(true);
+        try {
+            const response = await fetch(`${CRM_WEBHOOK_URL}?token=${encodeURIComponent(loginToken)}`, {
+                method: 'GET',
+                mode: 'cors'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log('CRM Data loaded:', data);
+            
+            const mergedData = Array.isArray(data) ? data[0] : data;
+            
+            // Templates extrahieren
+            if (mergedData.templates && mergedData.templates.templates) {
+                const allTemplates = mergedData.templates.templates;
+                const publicTemplates = allTemplates.filter(t => t.isPublic === true);
+                const clientTemplates = allTemplates.filter(t => t.isPublic === false);
+                
+                setTemplates({
+                    public: publicTemplates,
+                    clientSpecific: clientTemplates
+                });
+            }
+            
+            setCrmData(mergedData);
+            
+            const user = { 
+                email: `user_${loginToken}@webhook.com`, 
+                credits: mergedData.account?.credits || 100,
+                companyName: mergedData.account?.name || 'Unbekanntes Unternehmen',
+                companyId: mergedData.account?.id || mergedData.account?.companyId || null,
+                license: mergedData.account?.license || 'Free',
+                logoUrl: mergedData.account?.logoUrl || null,
+                primaryColor: mergedData.account?.primaryColor || '#6cba35',
+                secondaryColor: mergedData.account?.secondaryColor || '#333333',
+                accessToken: loginToken
+            };
+            
+            if (mergedData.webhooks) {
+                const newWebhooks = {
+                    ...webhooks,
+                    merge: mergedData.webhooks.mergeWebhook,
+                    videoUpload: mergedData.webhooks.videoUploadWebhook,
+                    avatarVideos: mergedData.webhooks.avatarVideosWebhook,
+                    aiVideo: mergedData.webhooks.aiVideoWebhook
+                };
+                setWebhooks(newWebhooks);
+                safeLocalStorage.setItem('video-generator-webhooks', JSON.stringify(newWebhooks));
+            }
+            
+            setCurrentUser(user);
+            setIsLoggedIn(true);
+            setShowLogin(false);
+            setShowLogoUpload(false);
+            setShowCrmLoading(false);
+            
+        } catch (error) {
+            console.error('CRM-Webhook-Fehler:', error);
+            const user = { 
+                email: `user_${loginToken}@webhook.com`, 
+                credits: 100,
+                companyName: 'Standard Unternehmen',
+                license: 'Free',
+                logoUrl: null,
+                primaryColor: '#6cba35',
+                secondaryColor: '#333333',
+                accessToken: loginToken
+            };
+            setCurrentUser(user);
+            setTemplates({ public: [], clientSpecific: [] });
+            setIsLoggedIn(true);
+            setShowLogin(false);
+            setShowLogoUpload(false);
+            setShowCrmLoading(false);
+        }
+    };
+    
+    // Token-basierte Login-Logik
+    const handleLogin = (loginToken, rememberMe = false) => {
+        // ✅ Token speichern wenn "Eingeloggt bleiben" aktiviert
+        if (rememberMe) {
+            safeLocalStorage.setItem('video-generator-auth-token', loginToken);
+            safeLocalStorage.setItem('video-generator-remember-me', 'true');
+        }
+        
+        loadCrmData(loginToken);
+        return true;
+    };
+
+    const handleLogoRequired = (loginToken) => {
+        setPendingLoginToken(loginToken);
+        setShowLogin(false);
+        setShowLogoUpload(true);
+    };
+
+    const handleLogoUploaded = () => {
+        if (pendingLoginToken) {
+            loadCrmData(pendingLoginToken);
+        }
+    };
+
+    const handleLogout = () => {
+        // ✅ Gespeicherten Token löschen
+        safeLocalStorage.setItem('video-generator-auth-token', '');
+        safeLocalStorage.setItem('video-generator-remember-me', 'false');
+        
+        setCurrentUser(null);
+        setIsLoggedIn(false);
+        setShowLogin(true);
+        setShowLogoUpload(false);
+        setPendingLoginToken(null);
+        setCrmData(null);
+    };
+    
+    // ✅ Auto-Login beim Start prüfen
+    useEffect(() => {
+        const checkAutoLogin = async () => {
+            const savedToken = safeLocalStorage.getItem('video-generator-auth-token');
+            const rememberMe = safeLocalStorage.getItem('video-generator-remember-me');
+            
+            if (savedToken && rememberMe === 'true') {
+                console.log('Auto-Login mit gespeichertem Token...');
+                setShowLogin(false);
+                setShowCrmLoading(true);
+                await loadCrmData(savedToken);
+            }
+        };
+        
+        checkAutoLogin();
+    }, []);
+
+    const updateUserCredits = (newCredits) => {
+        if (currentUser) {
+            setCurrentUser({ ...currentUser, credits: newCredits });
+        }
+    };
+
+    const updateWebhooks = (newWebhooks) => {
+        setWebhooks(newWebhooks);
+        safeLocalStorage.setItem('video-generator-webhooks', JSON.stringify(newWebhooks));
+    };
+
+    if (showLogin) {
+        return <LoginScreen 
+            onLogin={handleLogin} 
+            onLogoRequired={handleLogoRequired}
+            loginWebhookUrl={webhooks.login} 
+        />;
+    }
+
+    if (showLogoUpload) {
+        return <LogoUploadScreen 
+            onLogoUploaded={handleLogoUploaded}
+            onCancel={() => {
+                setShowLogoUpload(false);
+                setShowLogin(true);
+                setPendingLoginToken(null);
+            }}
+            logoUploadWebhookUrl={webhooks.logoUpload}
+            loginToken={pendingLoginToken}
+        />;
+    }
+
+    if (showCrmLoading) {
+        return <CrmLoadingScreen />;
+    }
+
+   return (
+    <VideoSceneGenerator 
+        currentUser={currentUser}
+        crmData={crmData}
+        templates={templates}
+        onLogout={handleLogout}
+        onUpdateCredits={updateUserCredits}
+        onUpdateWebhooks={updateWebhooks}
+        onUpdateUser={setCurrentUser}
+        masterPassword={MASTER_PASSWORD}
+        webhooks={webhooks}
+    />
+    );
+}
+
+        // LoginScreen - EXAKT UNVERÄNDERT aus Version 1
+        function LoginScreen({ onLogin, onLogoRequired, loginWebhookUrl }) {
+            const [loginToken, setLoginToken] = useState('');
+            const [error, setError] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+            const [rememberMe, setRememberMe] = useState(false); // ✅ NEU
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setError('');
+                setIsLoading(true);
+
+                try {
+                    const response = await fetch(`${loginWebhookUrl}?token=${encodeURIComponent(loginToken)}`, {
+                        method: 'GET',
+                        mode: 'cors'
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const contentType = response.headers.get('content-type');
+                    const contentLength = response.headers.get('content-length');
+                    
+                    console.log('Response Status:', response.status);
+                    console.log('Content-Type:', contentType);
+                    console.log('Content-Length:', contentLength);
+
+                    if (contentLength === '0' || contentLength === null) {
+                        console.error('Empty response received - webhook may still be processing');
+                        setError('Server verarbeitet noch. Bitte erneut versuchen.');
+                        setIsLoading(false);
+                        return;
+                    }
+
+                    const responseText = await response.text();
+                    console.log('Raw Response:', responseText);
+
+                    if (!responseText || responseText.trim() === '') {
+                        console.error('Empty response body');
+                        setError('Keine Antwort vom Server. Bitte erneut versuchen.');
+                        setIsLoading(false);
+                        return;
+                    }
+
+                    let result;
+                    try {
+                        result = JSON.parse(responseText);
+                        console.log('Parsed Result:', result);
+                    } catch (parseError) {
+                        console.error('JSON Parse Error:', parseError);
+                        console.error('Response was:', responseText);
+                        setError('Ungültige Server-Antwort');
+                        setIsLoading(false);
+                        return;
+                    }
+
+                    if (result.access === true) {
+    console.log('Access granted!');
+    onLogin(loginToken, rememberMe); // ✅ NEU
+}
+                    else if (result.hasOwnProperty('logo')) {
+                        if (result.logo === false || result.logo === true) {
+                            console.log('Logo upload required (logo field present)');
+                            onLogoRequired(loginToken);
+                        }
+                    }
+                    else if (result.access === false && result.logo === true) {
+                        console.log('Logo upload required (combined response)');
+                        onLogoRequired(loginToken);
+                    }
+                    else if (result.access === false) {
+                        console.log('Access denied');
+                        setError('Token nicht gefunden oder ungültig');
+                    }
+                    else {
+                        console.error('Unexpected response structure:', result);
+                        setError('Unerwartete Server-Antwort');
+                    }
+                    
+                } catch (err) {
+                    console.error('Webhook-Fehler:', err);
+                    
+                    if (err.name === 'AbortError') {
+                        setError('Anfrage hat zu lange gedauert. Bitte versuchen Sie es erneut.');
+                    } else if (err.message.includes('Failed to fetch')) {
+                        setError('Verbindungsfehler. Prüfen Sie Ihre Internetverbindung.');
+                    } else {
+                        setError('Anmeldung fehlgeschlagen. Bitte versuchen Sie es erneut.');
+                    }
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100 flex items-center justify-center relative">
+                    {isLoading && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                            <div className="bg-white p-8 rounded-lg shadow-xl">
+                                <div className="flex flex-col items-center">
+                                    <svg className="animate-spin h-12 w-12 text-blue-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    <p className="text-lg font-medium text-gray-700">Token wird überprüft...</p>
+                                    <p className="text-sm text-gray-500 mt-2">Bitte warten</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div className="bg-white p-8 rounded-lg shadow-md w-96">
+                        {/* Logo dezent eingebaut */}
+                        <div className="text-center mb-6">
+                            <img 
+                                src="https://easy-collab.de/content-maschine/images/logo/logo.png" 
+                                alt="Easy Collab Logo" 
+                                className="h-8 mx-auto mb-4 opacity-80"
+                                onError={(e) => {
+                                    e.target.style.display = 'none';
+                                }}
+                            />
+                            <h2 className="text-2xl font-bold text-gray-900">Video Generator Login</h2>
+                        </div>
+                        
+                        <form onSubmit={handleSubmit}>
+                            <div className="mb-6">
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    Login-Token
+                                </label>
+                                <input
+                                    type="text"
+                                    value={loginToken}
+                                    onChange={(e) => setLoginToken(e.target.value)}
+                                    className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+                                    required
+                                    disabled={isLoading}
+                                />
+                            </div>
+                            
+                            {/* ✅ Eingeloggt bleiben Checkbox */}
+<div className="mb-6 flex items-center">
+    <input
+        type="checkbox"
+        id="remember-me"
+        checked={rememberMe}
+        onChange={(e) => setRememberMe(e.target.checked)}
+        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+        disabled={isLoading}
+    />
+    <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
+        Eingeloggt bleiben
+    </label>
+</div>
+                            
+                            {error && !isLoading && (
+                                <div className="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded">
+                                    {error}
+                                </div>
+                            )}
+                            
+                            <button
+                                type="submit"
+                                className={`w-full text-white py-2 rounded-md font-medium ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                                disabled={isLoading}
+                            >
+                                Anmelden
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // LogoUploadScreen - EXAKT UNVERÄNDERT aus Version 1
+        function LogoUploadScreen({ onLogoUploaded, onCancel, logoUploadWebhookUrl, loginToken }) {
+            const [logoFile, setLogoFile] = useState(null);
+            const [error, setError] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+            const [previewUrl, setPreviewUrl] = useState(null);
+            
+            const LOGO_WEBHOOK_URL = "https://n8n.srv793158.hstgr.cloud/webhook/3a90f3c0-fc40-4a63-8dc3-13ee32cd5ba3";
+
+            const handleFileChange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    setLogoFile(file);
+                    const url = URL.createObjectURL(file);
+                    setPreviewUrl(url);
+                }
+            };
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                
+                if (!logoFile) {
+                    setError('Bitte wählen Sie ein Logo aus');
+                    return;
+                }
+
+                setError('');
+                setIsLoading(true);
+
+                try {
+                    const formData = new FormData();
+                    formData.append('logo', logoFile);
+                    formData.append('token', loginToken);
+
+                    const response = await fetch(LOGO_WEBHOOK_URL, {
+                        method: 'POST',
+                        body: formData,
+                        mode: 'cors'
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    let result;
+                    try {
+                        const responseText = await response.text();
+                        console.log('Logo Upload Response:', responseText);
+                        result = JSON.parse(responseText);
+                    } catch (parseError) {
+                        console.error('JSON Parse Error:', parseError);
+                        throw new Error('Ungültige Server-Antwort');
+                    }
+
+                    if (result.access === true) {
+                        console.log('Logo upload successful, access granted');
+                        onLogoUploaded();
+                    } else {
+                        console.error('Logo upload response:', result);
+                        setError('Logo-Upload fehlgeschlagen. Bitte versuchen Sie es erneut.');
+                    }
+
+                } catch (err) {
+                    console.error('Logo-Upload-Fehler:', err);
+                    setError('Upload fehlgeschlagen. Bitte versuchen Sie es erneut.');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100 flex items-center justify-center relative">
+                    {isLoading && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                            <div className="bg-white p-8 rounded-lg shadow-xl">
+                                <div className="flex flex-col items-center">
+                                    <svg className="animate-spin h-12 w-12 text-blue-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    <p className="text-lg font-medium text-gray-700">Logo wird hochgeladen...</p>
+                                    <p className="text-sm text-gray-500 mt-2">Bitte warten</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div className="bg-white p-8 rounded-lg shadow-md w-96">
+                        <h2 className="text-2xl font-bold text-gray-900 mb-4 text-center">Logo hochladen</h2>
+                        
+                        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                            <p className="text-sm text-blue-800">
+                                Wir haben von Ihnen noch kein Logo hinterlegt. Bitte laden Sie Ihr Unternehmenslogo hoch, um fortzufahren.
+                            </p>
+                        </div>
+
+                        <form onSubmit={handleSubmit}>
+                            <div className="mb-6">
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    Logo auswählen
+                                </label>
+                                <input
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+                                    onChange={handleFileChange}
+                                    className="w-full text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                                    required
+                                    disabled={isLoading}
+                                />
+                                
+                                {previewUrl && (
+                                    <div className="mt-4 p-4 border border-gray-200 rounded-md">
+                                        <p className="text-sm text-gray-600 mb-2">Vorschau:</p>
+                                        <img 
+                                            src={previewUrl} 
+                                            alt="Logo Vorschau" 
+                                            className="max-w-full h-auto max-h-32 mx-auto"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                            
+                            {error && !isLoading && (
+                                <div className="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded">
+                                    {error}
+                                </div>
+                            )}
+                            
+                            <div className="space-y-2">
+                                <button
+                                    type="submit"
+                                    className={`w-full text-white py-2 rounded-md font-medium ${isLoading || !logoFile ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                                    disabled={isLoading || !logoFile}
+                                >
+                                    Logo hochladen und fortfahren
+                                </button>
+                                
+                                <button
+                                    type="button"
+                                    onClick={onCancel}
+                                    className="w-full text-gray-700 py-2 rounded-md font-medium bg-gray-200 hover:bg-gray-300"
+                                    disabled={isLoading}
+                                >
+                                    Abbrechen
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // Neue CRM Loading Screen Component
+        function CrmLoadingScreen() {
+            return (
+                <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+                    <div className="bg-white p-8 rounded-lg shadow-xl">
+                        <div className="flex flex-col items-center">
+                            <svg className="animate-spin h-16 w-16 text-blue-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <p className="text-xl font-medium text-gray-700">Lade Unternehmensdaten...</p>
+                            <p className="text-sm text-gray-500 mt-2">Einen Moment bitte</p>
+                            <div className="mt-4 flex gap-2">
+                                <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></div>
+                                <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
+                                <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        // VideoSceneGenerator - Angepasste Version aus Version 2
+      function VideoSceneGenerator({ currentUser, crmData, templates, onLogout, onUpdateCredits, onUpdateWebhooks, onUpdateUser, masterPassword, webhooks }) {
+    const [projectTitle, setProjectTitle] = useState('');
+    const [scenes, setScenes] = useState([]);
+    const [previewScene, setPreviewScene] = useState(null);
+    const [showWebhooks, setShowWebhooks] = useState(false);
+    const [masterPwWebhooks, setMasterPwWebhooks] = useState('');
+    const [webhooksAuthenticated, setWebhooksAuthenticated] = useState(false);
+    const [activeTab, setActiveTab] = useState('webhooks');
+    const [draggedItem, setDraggedItem] = useState(null);
+    const [dragOverIndex, setDragOverIndex] = useState(null);
+    const [debugMode, setDebugMode] = useState(false);
+    const [videoError, setVideoError] = useState(false);
+    const [showEditConfirmModal, setShowEditConfirmModal] = useState(null);
+    const [showMergeSuccessModal, setShowMergeSuccessModal] = useState(false);
+    const [mergedVideoData, setMergedVideoData] = useState(null);
+    const [collapsedScenes, setCollapsedScenes] = useState(new Set());
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [currentPreviewIndex, setCurrentPreviewIndex] = useState(0);
+    const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+    
+    // NEU: Template-Auswahl Modal States
+    const [showTemplateSelector, setShowTemplateSelector] = useState(false);
+    const [selectedTemplateTab, setSelectedTemplateTab] = useState('public');
+    
+    // NEU: Toast und Modal States
+const [showToast, setShowToast] = useState(false);
+const [toastMessage, setToastMessage] = useState('');
+const [showMusicUploadModal, setShowMusicUploadModal] = useState(false);
+const [showRestartConfirmModal, setShowRestartConfirmModal] = useState(false);
+const [showAiModal, setShowAiModal] = useState(false);
+const [designEditMode, setDesignEditMode] = useState(false);
+const [aiWizardStep, setAiWizardStep] = useState(1); // 1 = Upload, 2 = Texteingabe
+const [aiWizardFiles, setAiWizardFiles] = useState([]);
+const [aiWizardPrompt, setAiWizardPrompt] = useState('');
+const [aiWizardLoading, setAiWizardLoading] = useState(false);
+const [showColorPicker, setShowColorPicker] = useState(null);
+const [tempColor, setTempColor] = useState('');
+
+
+    
+    // Logo aus CRM-Daten verwenden
+    const logoFile = currentUser?.logoUrl || crmData?.Logo_URL || null;
+    
+    // Hilfsfunktion für sicheren localStorage Zugriff
+    const safeLocalStorage = {
+        getItem: (key) => {
+            try {
+                return localStorage.getItem(key);
+            } catch {
+                return null;
+            }
+        },
+        setItem: (key, value) => {
+            try {
+                localStorage.setItem(key, value);
+                return true;
+            } catch {
+                console.warn('LocalStorage nicht verfügbar');
+                return false;
+            }
+        }
+    };
+    
+    // Musik-Einstellungen
+    const [musicEnabled, setMusicEnabled] = useState(() => {
+        const saved = safeLocalStorage.getItem('video-generator-music-enabled');
+        return saved ? JSON.parse(saved) : false;
+    });
+    
+    const [selectedMusic, setSelectedMusic] = useState(() => {
+        return safeLocalStorage.getItem('video-generator-selected-music') || '';
+    });
+    
+   const [selectedAvatar, setSelectedAvatar] = useState(() => {
+    return safeLocalStorage.getItem('video-generator-selected-avatar') || '';
+});
+
+const updateSelectedAvatar = (avatarId) => {
+    setSelectedAvatar(avatarId);
+    safeLocalStorage.setItem('video-generator-selected-avatar', avatarId);
+};
+    
+    const [musicVolume, setMusicVolume] = useState(() => {
+        const saved = safeLocalStorage.getItem('video-generator-music-volume');
+        return saved ? parseInt(saved) : 50;
+    });
+    
+    const [playingMusic, setPlayingMusic] = useState(null);
+    const [localPrimaryColor, setLocalPrimaryColor] = useState(currentUser?.primaryColor || '#6cba35');
+const [localSecondaryColor, setLocalSecondaryColor] = useState(currentUser?.secondaryColor || '#333333');
+const [currentLogoUrl, setCurrentLogoUrl] = useState(currentUser?.logoUrl || crmData?.Logo_URL || null);
+const [newLogoFile, setNewLogoFile] = useState(null);
+
+
+    // Credit-Kosten pro Szenentyp
+    const [creditCosts, setCreditCosts] = useState(() => {
+        const saved = safeLocalStorage.getItem('video-generator-credit-costs');
+        return saved ? JSON.parse(saved) : {
+            'upload': 0,  // NEU: Geändert von 'video-upload' zu 'upload'
+            'template': 5,  // NEU: Standard-Kosten für Templates
+            'ai-video': 7,
+            'merge': 20
+        };
+    });
+
+    // Avatar Daten (BLEIBT UNVERÄNDERT)
+    const avatars = [
+        { 
+            id: 'annie', 
+            name: 'Annie', 
+            image: './images/avatars/Annie.png', 
+            videoUrl: 'https://your-domain.com/avatar-previews/annie.mp4' 
+        },
+        // ... Rest der Avatare bleibt gleich
+    ];
+
+    // Gemafreie Hintergrundmusik (BLEIBT UNVERÄNDERT)
+    const backgroundMusic = crmData?.music?.music || [];
+    
+    // Avatare aus Webhook laden
+const availableAvatars = crmData?.avatars?.avatars || [];
+
+    // NEU: Template-basierte Szene hinzufügen
+    const addTemplateScene = (template) => {
+    if (scenes.length >= 10) {
+        alert('Maximal 10 Szenen erlaubt!');
+        return;
+    }
+    
+    // Variablen-Objekt erstellen
+    const variables = {};
+    const variableLengths = {}; // NEU: Speichere Laengenlimits
+    
+    for (let i = 1; i <= 10; i++) {
+        const varName = template[`variable${i}`];
+        const varLength = template[`variable${i}L`]; // NEU: Hole Laenge
+        
+        if (varName) {
+            variables[varName] = '';
+            variableLengths[varName] = varLength; // NEU: Speichere Laenge
+        }
+    }
+    
+    if (variables.hasOwnProperty('Logo') && logoFile) {
+        variables.Logo = logoFile;
+    }
+    if (variables.hasOwnProperty('Color1') && currentUser?.primaryColor) {
+        variables.Color1 = currentUser.primaryColor;
+    }
+    
+    const newScene = {
+        id: Date.now(),
+        type: 'template',
+        templateId: template.templateId,
+        templateName: template.templateName,
+        heygenTemplateId: template.heygenTemplateId,
+        thumbnailUrl: template.thumbnailUrl,
+        variables: variables,
+        variableLengths: variableLengths, // NEU: Fuege Laengenlimits hinzu
+        status: 'pending',
+        videoUrl: null,
+        webhookResponse: null
+    };
+    
+    setScenes([...scenes, newScene]);
+    setShowTemplateSelector(false);
+};
+    
+    // NEU: Upload-Szene hinzufügen
+    const addUploadScene = () => {
+        if (scenes.length >= 10) {
+            alert('Maximal 10 Szenen erlaubt!');
+            return;
+        }
+        
+        const newScene = {
+            id: Date.now(),
+            type: 'upload',
+            videoFile: null,
+            videoUrl: null,
+            rightsConfirmed: false,
+            status: 'pending',
+            webhookResponse: null
+        };
+        
+        setScenes([...scenes, newScene]);
+        setShowTemplateSelector(false);
+    };
+
+    // AB HIER BLEIBT ALLES GLEICH: addScene, updateScene, removeScene, etc.
+
+            const addScene = () => {
+                if (scenes.length >= 10) {
+                    alert('Maximal 10 Szenen erlaubt!');
+                    return;
+                }
+                
+                const newScene = {
+                    id: Date.now(),
+                    type: 'video-upload',
+                    status: 'pending',
+                    overlayText: '',
+                    speechText: '',
+                    aiDescription: '',
+                    selectedAvatar: '',
+                    avatarPosition: 'center',
+                    avatarType: 'face',
+                    animateImage: false,
+                    rightsConfirmed: false,
+                    videoFile: null,
+                    imageFile: null,
+                    videoUrl: null,
+                    webhookResponse: null
+                };
+                setScenes([...scenes, newScene]);
+            };
+
+            const updateScene = (id, updates) => {
+                setScenes(scenes.map(scene => 
+                    scene.id === id ? { ...scene, ...updates } : scene
+                ));
+            };
+            
+// ✅ NEU: Szene ein-/ausklappen
+const toggleCollapse = (sceneId) => {
+    setCollapsedScenes(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(sceneId)) {
+            newSet.delete(sceneId);
+        } else {
+            newSet.add(sceneId);
+        }
+        return newSet;
+    });
+};
+
+
+// Funktion zum Download starten
+const downloadSceneVideo = async (scene) => {
+    const downloadUrl = scene.downloadUrl || scene.videoUrl;
+    if (!downloadUrl) return;
+    
+    try {
+        // Zeige Loading-Indicator
+        console.log('Lade Video herunter...');
+        
+        // Fetch das Video als Blob
+        const response = await fetch(downloadUrl);
+        if (!response.ok) throw new Error('Download fehlgeschlagen');
+        
+        const blob = await response.blob();
+        
+        // Erstelle einen Blob-URL
+        const blobUrl = URL.createObjectURL(blob);
+        
+        // Erstelle Download-Link
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = `scene-${scene.id}-${scene.type}.mp4`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // Cleanup: Blob-URL freigeben nach kurzem Timeout
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+        
+        console.log('Download gestartet!');
+    } catch (error) {
+        console.error('Download-Fehler:', error);
+        alert('Fehler beim Herunterladen des Videos. Bitte versuchen Sie es erneut oder öffnen Sie das Video im Browser.');
+    }
+};
+
+// Neue regenerateScene Funktion mit Popup
+const regenerateScene = (sceneId) => {
+    // Zeige das Bestätigungs-Modal
+    setShowEditConfirmModal(sceneId);
+};
+
+// 1. NUR HERUNTERLADEN (Szene bleibt)
+const downloadAndCloseModal = async (sceneId) => {
+    const scene = scenes.find(s => s.id === sceneId);
+    if (scene) {
+        await downloadSceneVideo(scene);
+    }
+    setShowEditConfirmModal(null); // Nur Modal schließen
+};
+
+// 2. NEU GENERIEREN (Szene zurücksetzen)
+const confirmRegenerate = (sceneId) => {
+    updateScene(sceneId, { 
+        status: 'pending', 
+        videoUrl: null,
+        downloadUrl: null,
+        webhookResponse: null 
+    });
+    setShowEditConfirmModal(null);
+};
+
+
+
+// MODAL COMPONENT (füge im JSX return hinzu, am besten vor dem schließenden </div>)
+{showEditConfirmModal && (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <div className="flex items-start mb-4">
+                <div className="flex-shrink-0 w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center mr-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-yellow-600">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                </div>
+                <div className="flex-1">
+                    <h3 className="text-lg font-bold text-gray-900 mb-2">
+                        Szene bearbeiten
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                        Bitte laden Sie das Video herunter, wenn Sie es behalten möchten. 
+                        Nach erneuter Bearbeitung ist ein Aufruf dieses Videos nicht mehr möglich.
+                    </p>
+                </div>
+            </div>
+            
+            <div className="space-y-3 mt-6">
+    {/* Button 1: NUR HERUNTERLADEN */}
+    <button
+        onClick={() => downloadAndCloseModal(showEditConfirmModal)}
+        className="w-full px-4 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Video herunterladen
+    </button>
+    
+    {/* Button 2: NEU GENERIEREN */}
+    <button
+        onClick={() => confirmRegenerate(showEditConfirmModal)}
+        className="w-full px-4 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 font-medium"
+    >
+        Ja, neu generieren
+    </button>
+    
+    {/* Button 3: ABBRECHEN */}
+    <button
+        onClick={() => setShowEditConfirmModal(null)}
+        className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium"
+    >
+        Nein, abbrechen
+    </button>
+</div>
+        </div>
+    </div>
+)}
+
+
+            const removeScene = (id) => {
+                                  setScenes(scenes.filter(scene => scene.id !== id));
+              
+            };
+            
+             const handleRestart = () => {
+                setScenes([]);
+                setProjectTitle('');
+                setCollapsedScenes(new Set());
+                setShowRestartConfirmModal(false);
+                console.log('🔄 Projekt wurde zurückgesetzt');
+            };
+            
+            // Credit-Kosten speichern
+            const updateCreditCosts = (newCosts) => {
+                setCreditCosts(newCosts);
+                safeLocalStorage.setItem('video-generator-credit-costs', JSON.stringify(newCosts));
+            };
+
+            // Musik-Einstellungen speichern
+            const updateMusicEnabled = (enabled) => {
+                setMusicEnabled(enabled);
+                safeLocalStorage.setItem('video-generator-music-enabled', JSON.stringify(enabled));
+            };
+
+            const updateSelectedMusic = (musicId) => {
+                setSelectedMusic(musicId);
+                safeLocalStorage.setItem('video-generator-selected-music', musicId);
+            };
+            
+            const refreshCredits = async () => {
+    if (!currentUser?.companyId) return;
+    
+    try {
+        const response = await fetch(
+            `https://n8n.srv793158.hstgr.cloud/webhook/credit-update?companyId=${currentUser.companyId}`,
+            { method: 'GET', mode: 'cors' }
+        );
+        
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Credit Update Response:', data);
+            
+            // Direktes Format: { "success": true, "credits": 112 }
+            if (data.success && data.credits !== undefined) {
+                onUpdateCredits(data.credits);
+            }
+        }
+    } catch (error) {
+        console.error('Fehler beim Laden der Credits:', error);
+    }
+};
+            
+            const updateMusicVolume = (volume) => {
+                setMusicVolume(volume);
+                safeLocalStorage.setItem('video-generator-music-volume', volume.toString());
+            };
+
+            // Webhook-Aufrufe EXAKT aus Version 1 übernommen
+            const generateScene = async (sceneId) => {
+    const scene = scenes.find(s => s.id === sceneId);
+    if (!scene) return;
+    
+    // Bestimme Webhook-URL basierend auf Szenentyp
+    let webhookUrl;
+    let cost = 0;
+    
+    switch (scene.type) {
+        case 'upload':
+            webhookUrl = webhooks.videoUpload; // videoUploadWebhook
+            cost = creditCosts.upload; // 0 Credits
+            break;
+        case 'ai-video':
+            webhookUrl = webhooks.aiVideo; // aiVideoWebhook
+            cost = creditCosts['ai-video']; // 7 Credits
+            break;
+        case 'template':
+            webhookUrl = webhooks.avatarVideos; // avatarVideosWebhook für Templates
+            cost = creditCosts.template; // 5 Credits
+            break;
+        default:
+            alert('Unbekannter Szenentyp');
+            return;
+    }
+    
+    // Check credits
+    if (currentUser.credits < cost) {
+        alert(`Nicht genügend Credits! Sie benötigen ${cost} Credits für diese Szene.`);
+        return;
+    }
+    
+    // Update status to generating
+    updateScene(sceneId, { status: 'generating' });
+    
+    try {
+        const formData = new FormData();
+        
+        // GEMEINSAME DATEN (immer übergeben)
+        const baseData = {
+            title: projectTitle,
+            primaryColor: currentUser.primaryColor,
+            secondaryColor: currentUser.secondaryColor,
+            logoUrl: currentUser.logoUrl,
+            companyId: currentUser.companyId,
+            companyName: currentUser.companyName,
+            credits: currentUser.credits,
+            sceneCost: cost
+        };
+        
+        // Logo als File oder URL
+        if (logoFile) {
+            if (typeof logoFile === 'string') {
+                baseData.logoUrl = logoFile;
+            } else {
+                formData.append('logo', logoFile, logoFile.name);
+            }
+        }
+        
+        // SZENEN-SPEZIFISCHE DATEN
+        let sceneData = { ...baseData };
+        
+        switch (scene.type) {
+            case 'upload':
+                // VIDEO UPLOAD SZENE
+                sceneData.rightsConfirmed = scene.rightsConfirmed || false;
+                
+                if (scene.videoFile) {
+                    formData.append('video', scene.videoFile, scene.videoFile.name);
+                }
+                break;
+                
+            case 'ai-video':
+                // AI VIDEO SZENE - MIT NEUEN FELDERN
+                sceneData.prompt = scene.prompt || '';
+                sceneData.speechText = scene.speechText || ''; // NEU
+                
+                // Bild-Upload (Binary)
+                if (scene.imageFile) {
+                    formData.append('image', scene.imageFile, scene.imageFile.name);
+                }
+                break;
+                
+            case 'template':
+                // TEMPLATE SZENE - MIT ALLEN DATEN
+                sceneData.templateId = scene.templateId; // z.B. "428276000015125760"
+                sceneData.heygenTemplateId = scene.heygenTemplateId; // z.B. "ad197c3bc4884df..."
+                sceneData.templateName = scene.templateName;
+                sceneData.thumbnailUrl = scene.thumbnailUrl;
+                
+                // Alle Template-Variablen einzeln übergeben
+                sceneData.variables = scene.variables || {};
+                
+                // Optional: Avatar Override
+                if (scene.useCustomAvatar && scene.customAvatarId) {
+                    sceneData.customAvatarId = scene.customAvatarId;
+                    
+                    // Avatar-Details finden
+                    const customAvatar = availableAvatars.find(a => a.subAvatarId === scene.customAvatarId);
+                    if (customAvatar) {
+                        sceneData.customAvatarDetails = {
+                            avatarId: customAvatar.avatarId,
+                            voiceId: customAvatar.voiceId,
+                            avatarName: customAvatar.avatarName
+                        };
+                    }
+                } else if (selectedAvatar) {
+                    // Standard-Avatar verwenden
+                    sceneData.defaultAvatarId = selectedAvatar;
+                    
+                    const defaultAvatar = availableAvatars.find(a => a.subAvatarId === selectedAvatar);
+                    if (defaultAvatar) {
+                        sceneData.defaultAvatarDetails = {
+                            avatarId: defaultAvatar.avatarId,
+                            voiceId: defaultAvatar.voiceId,
+                            avatarName: defaultAvatar.avatarName
+                        };
+                    }
+                }
+                break;
+        }
+        
+        // Scene-Daten als JSON-String hinzufügen
+        formData.append('sceneData', JSON.stringify(sceneData));
+        
+        // DEBUG OUTPUT
+        if (debugMode) {
+            console.log('=== WEBHOOK DEBUG INFO ===');
+            console.log('Scene Type:', scene.type);
+            console.log('Webhook URL:', webhookUrl);
+            console.log('Scene Data:', sceneData);
+            console.log('Cost:', cost, 'Credits');
+            console.log('FormData Entries:');
+            for (let [key, value] of formData.entries()) {
+                if (value instanceof File) {
+                    console.log(`  ${key}: [File] ${value.name} (${value.size} bytes, ${value.type})`);
+                } else {
+                    console.log(`  ${key}:`, value);
+                }
+            }
+            console.log('=========================');
+        }
+        
+        // POST REQUEST
+  // POST REQUEST
+const response = await fetch(webhookUrl, {
+    method: 'POST',
+    body: formData,
+    mode: 'cors'
+});
+
+if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+}
+
+let result;
+try {
+    result = await response.json();
+} catch (jsonError) {
+    console.log('Response ist kein JSON, verwende Fallback');
+    result = {};
+}
+
+// VERARBEITE DIE WEBHOOK-RESPONSE
+if (debugMode) {
+    console.log('Webhook Response:', result);
+}
+
+// NEU: Prüfe ob "processing" Response (Template/Avatar Video)
+if (result.success && result.status === 'processing') {
+    const executionId = result.executionId;  // ← Vom Server!
+    
+    setScenes(prev => prev.map(s => 
+        s.id === sceneId 
+            ? { 
+                ...s, 
+                executionId: executionId  // ← Nur executionId speichern
+              }
+            : s
+    ));
+    
+    startPolling(sceneId, executionId);  // ← executionId als callback_id!
+    return;
+}
+
+
+let videoUrl = null;
+let status = 'error';
+let errorMessage = null;
+
+// Prüfe auf HeyGen Response Format (von Avatar/Template Videos)
+if (result.success && result.status === 'completed' && result.videoUrl) {
+    videoUrl = result.videoUrl;
+    status = 'completed';
+}
+// Prüfe auf Upload/Compress Response Format (Array)
+else if (Array.isArray(result) && result.length > 0) {
+    videoUrl = result[0].compressedUrl || result[0].previewUrl || result[0].originalUrl || null;
+    status = videoUrl ? 'completed' : 'error';
+}
+// Prüfe auf alternatives Format
+else if (result.videoUrl || result.compressedUrl || result.previewUrl) {
+    videoUrl = result.previewUrl || result.compressedUrl || result.videoUrl;
+    status = 'completed';
+}
+// Fehlerfall
+else if (result.status === 'error') {
+    status = 'error';
+    errorMessage = result.error || 'Video konnte nicht generiert werden';
+}
+
+if (debugMode) {
+    console.log('Extrahierte Video URL:', videoUrl);
+    console.log('Status:', status);
+}
+
+// UPDATE SCENE
+if (status === 'completed' && videoUrl) {
+    // Video erfolgreich generiert!
+    setScenes(prev => prev.map(s => 
+        s.id === sceneId 
+            ? { 
+                ...s, 
+                status: 'completed',
+                videoUrl: videoUrl,
+                thumbnailUrl: result.thumbnailUrl || null,
+                duration: result.duration || null,
+                webhookResponse: result
+              }
+            : s
+    ));
+    
+    // Credits abziehen
+    onUpdateCredits(currentUser.credits - cost);
+    
+    // ✅ Credits vom Server neu laden
+    refreshCredits();
+    
+} else {
+    // Fehler beim Generieren
+    setScenes(prev => prev.map(s => 
+        s.id === sceneId 
+            ? { 
+                ...s, 
+                status: 'error',
+                errorMessage: errorMessage || 'Video konnte nicht generiert werden',
+                webhookResponse: result
+              }
+            : s
+    ));
+}
+} catch (error) {  // ← HIER EINFÜGEN!
+        console.error('Fehler beim Generieren:', error);
+        
+        setScenes(prev => prev.map(s => 
+            s.id === sceneId 
+                ? { 
+                    ...s, 
+                    status: 'error',
+                    errorMessage: error.message || 'Unbekannter Fehler beim Generieren'
+                  }
+                : s
+        ));
+        
+        alert('Fehler beim Generieren: ' + error.message);
+    }
+};
+
+// NEU: Polling-Funktion
+const startPolling = (sceneId, executionId) => {
+    const maxAttempts = 120;
+    let attempts = 0;
+    
+    // ✅ SPEICHERE DIE WERTE VOR DEM INTERVAL
+    const currentScene = scenes.find(s => s.id === sceneId);
+    const sceneType = currentScene?.type || 'template';
+    const sceneCost = creditCosts[sceneType] || 0;
+    
+    if (debugMode) {
+        console.log('Starte Polling für Scene:', sceneId, 'Execution ID:', executionId);
+        console.log('Scene Type:', sceneType, 'Cost:', sceneCost);
+    }
+    
+    const interval = setInterval(async () => {
+        attempts++;
+        
+        if (debugMode) {
+            console.log(`Polling Versuch ${attempts}/${maxAttempts} für Scene ${sceneId}`);
+        }
+        
+        try {
+            const response = await fetch(
+                `https://n8n.srv793158.hstgr.cloud/webhook/2c1bbd5d-f676-472e-8328-a7bd65d36620?check=true&executionId=${executionId}`,
+                {
+                    method: 'GET',
+                    mode: 'cors'
+                }
+            );
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            let data = await response.json();
+            
+            // Wenn Array, nimm erstes Element
+            if (Array.isArray(data)) {
+                data = data[0];
+            }
+            
+            if (debugMode) {
+                console.log('Polling Response:', data);
+                console.log('Status:', data?.status);
+                console.log('VideoUrl:', data?.videoUrl);
+            }
+            
+            // ✅ Prüfe auf completed
+            if (data && data.status === 'completed' && data.videoUrl) {
+                if (debugMode) {
+                    console.log('✅ VIDEO FERTIG! Stoppe Polling...');
+                }
+                
+                // WICHTIG: Interval SOFORT stoppen
+                clearInterval(interval);
+                
+                // ✅ Update Scene mit funktionalem State Update
+                setScenes(prev => prev.map(s => 
+                    s.id === sceneId 
+                        ? { 
+                            ...s, 
+                            status: 'completed',
+                            videoUrl: data.videoUrl,
+                            thumbnailUrl: data.thumbnailUrl || null,
+                            duration: data.duration || null
+                          }
+                        : s
+                ));
+                
+                // ✅ Credits abziehen (mit gespeichertem Cost)
+                onUpdateCredits(prev => prev - sceneCost);
+                
+                // ✅ Credits vom Server neu laden
+                refreshCredits();
+                
+                // ✅ Credits abziehen (mit gespeichertem Cost)
+                onUpdateCredits(prev => prev - sceneCost);
+                
+                if (debugMode) {
+                    console.log(`Credits abgezogen: -${sceneCost}`);
+                    console.log('Video erfolgreich geladen für Scene:', sceneId);
+                }
+            }
+            
+            // ✅ NEU: Prüfe auf Error
+            if (data && data.status === 'error') {
+                if (debugMode) {
+                    console.log('❌ ERROR vom Server! Stoppe Polling...');
+                    console.log('Error Message:', data.message);
+                }
+                
+                clearInterval(interval);
+                
+                setScenes(prev => prev.map(s => 
+                    s.id === sceneId 
+                        ? { 
+                            ...s, 
+                            status: 'error', 
+                            errorMessage: data.message || 'Video konnte nicht generiert werden',
+                            executionId: executionId
+                          }
+                        : s
+                ));
+                
+                return; // Stoppe Funktion
+            }
+            
+        } catch (error) {
+            console.error('Polling Fehler:', error);
+        }
+        
+        // Max attempts erreicht
+        if (attempts >= maxAttempts) {
+            clearInterval(interval);
+            
+            setScenes(prev => prev.map(s => 
+                s.id === sceneId 
+                    ? { 
+                        ...s, 
+                        status: 'error', 
+                        errorMessage: 'Timeout: Video konnte nicht generiert werden (10 Min)'
+                      }
+                    : s
+            ));
+            
+            alert('Timeout: Das Video konnte nicht rechtzeitig generiert werden.');
+        }
+    }, 10000); // Alle 10 Sekunden
+};
+
+     
+           const mergeVideos = async () => {
+    const mergeCost = creditCosts.merge;
+    
+    if (currentUser.credits < mergeCost) {
+        alert(`Nicht genügend Credits für das Zusammenführen! Sie benötigen ${mergeCost} Credits.`);
+        return;
+    }
+    
+    const completedScenes = scenes.filter(s => s.status === 'completed');
+    
+    console.log('=== MERGE DEBUG ===');
+    console.log('Merge Webhook URL:', webhooks.merge);
+    console.log('Webhook leer?', !webhooks.merge);
+    
+    if (!webhooks.merge) {
+        alert('❌ Merge-Webhook ist nicht konfiguriert!\n\nBitte gehen Sie zu Admin-Einstellungen und tragen Sie die Merge-Webhook-URL ein.');
+        return;
+    }
+    
+    // ✅ NEU: Zeige Loading-Modal während des Merge
+    setShowMergeSuccessModal(true);
+    setMergedVideoData({
+        status: 'processing',
+        message: 'Video wird zusammengeführt...'
+    });
+    
+    try {
+        const formData = new FormData();
+        
+        if (logoFile) {
+            if (typeof logoFile === 'string') {
+                formData.append('logoUrl', logoFile);
+            } else {
+                formData.append('logo', logoFile, logoFile.name);
+            }
+        }
+        
+        const selectedMusicTrack = backgroundMusic.find(m => m.subMusicId === selectedMusic);
+        
+        const formDataFields = {};
+        
+        completedScenes.forEach((scene, idx) => {
+    formDataFields[`video_url_${idx + 1}`] = scene.videoUrl;
+    formDataFields[`transition_${idx + 1}`] = 'fade';
+});
+        
+        if (musicEnabled && selectedMusicTrack?.musicUrl) {
+            formDataFields.background_music_url = selectedMusicTrack.musicUrl;
+            formDataFields.music_volume = musicVolume / 100;
+        }
+        
+        formDataFields.draft_mode = true;
+        formDataFields.project_title = projectTitle;
+        formDataFields.user_email = currentUser.email;
+        formDataFields.company_name = currentUser.companyName;
+        formDataFields.company_id = currentUser.companyId;
+        
+        console.log('=== FORM DATA FOR N8N ===');
+        console.log(JSON.stringify(formDataFields, null, 2));
+        
+        formData.append('form_data', JSON.stringify(formDataFields));
+        
+        if (debugMode) {
+            console.log('=== MERGE WEBHOOK DEBUG ===');
+            console.log('Webhook URL:', webhooks.merge);
+            console.log('Merge Data:', formDataFields);
+            console.log('Logo included:', logoFile ? 'Yes' : 'No');
+            console.log('Music included:', musicEnabled ? 'Yes' : 'No');
+            if (musicEnabled) {
+                console.log('Music URL:', selectedMusicTrack?.musicUrl);
+            }
+            console.log('=========================');
+        }
+
+        const response = await fetch(webhooks.merge, {
+            method: 'POST',
+            body: formData,
+            mode: 'cors'
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        let result;
+        try {
+            result = await response.json();
+        } catch (jsonError) {
+            console.log('Response ist kein JSON');
+            result = {};
+        }
+
+        console.log('Merge Response:', result);
+
+        if (result.success && result.status === 'processing' && result.executionId) {
+            const executionId = result.executionId;
+            
+            console.log('✅ Merge gestartet! Execution ID:', executionId);
+            
+            setMergedVideoData({
+                status: 'processing',
+                message: 'Video wird generiert... (Execution ID: ' + executionId + ')',
+                executionId: executionId
+            });
+            
+            await startMergePolling(executionId, mergeCost);
+            
+        } else {
+            let previewUrl = null;
+            let downloadUrl = null;
+            
+            if (Array.isArray(result) && result.length > 0) {
+                previewUrl = result[0].compressedUrl || result[0].previewUrl || result[0].originalUrl;
+                downloadUrl = result[0].downloadUrl || result[0].originalUrl || previewUrl;
+            } else if (result.videoUrl || result.compressedUrl || result.previewUrl) {
+                previewUrl = result.previewUrl || result.compressedUrl || result.videoUrl;
+                downloadUrl = result.downloadUrl || result.originalUrl || previewUrl;
+            }
+
+            if (debugMode) {
+                console.log('Merge erfolgreich! (sofort)');
+                console.log('Preview URL:', previewUrl);
+                console.log('Download URL:', downloadUrl);
+            }
+
+            onUpdateCredits(currentUser.credits - mergeCost);
+
+            setMergedVideoData({
+                status: 'completed',
+                previewUrl: previewUrl,
+                downloadUrl: downloadUrl,
+                projectTitle: projectTitle,
+                result: result
+            });
+            setShowMergeSuccessModal(true);
+        }
+
+    } catch (error) {
+        console.error('Merge-Webhook-Fehler:', error);
+        
+        setMergedVideoData({
+            status: 'error',
+            message: error.message
+        });
+        
+        let errorMessage = error.message;
+        if (error.message.includes('Failed to fetch')) {
+            errorMessage = 'Verbindungsfehler - Prüfen Sie die URL und CORS-Einstellungen';
+        }
+        alert(`❌ Fehler beim Zusammenführen:\n\n${errorMessage}\n\nDetails siehe Browser-Konsole (F12)`);
+    }
+};
+
+const startMergePolling = async (executionId, mergeCost) => {
+    const maxAttempts = 60;
+    let attempts = 0;
+    
+    console.log('🔄 Starte Merge-Polling...', { executionId, mergeCost });
+    
+    return new Promise((resolve, reject) => {
+        const interval = setInterval(async () => {
+            attempts++;
+            
+            console.log(`🔍 Merge-Polling Versuch ${attempts}/${maxAttempts}`);
+            
+            try {
+                const response = await fetch(
+                    `${webhooks.merge}?check=true&executionId=${executionId}`,
+                    {
+                        method: 'GET',
+                        mode: 'cors'
+                    }
+                );
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                let data = await response.json();
+                
+                if (Array.isArray(data)) {
+                    data = data[0];
+                }
+                
+                if (debugMode) {
+                    console.log('Merge Polling Response:', data);
+                    console.log('Status:', data?.status);
+                    console.log('VideoUrl:', data?.videoUrl);
+                }
+                
+                setMergedVideoData(prev => ({
+                    ...prev,
+                    message: `Video wird generiert... (${attempts}/${maxAttempts})`,
+                    status: data?.status || 'processing'
+                }));
+                
+                               if (data && (data.status === 'completed' || data.status === 'done') && data.videoUrl) {
+                    console.log('✅ MERGE FERTIG! Stoppe Polling...');
+                    
+                    clearInterval(interval);
+                    
+                    onUpdateCredits(currentUser.credits - mergeCost);
+                    
+                    console.log(`Credits abgezogen: -${mergeCost}`);
+                    
+                    setMergedVideoData({
+                        status: 'completed',
+                        previewUrl: data.videoUrl,
+                        downloadUrl: data.videoUrl,
+                        thumbnailUrl: data.thumbnailUrl || null,
+                        duration: data.duration || null,
+                        projectTitle: projectTitle
+                    });
+                    
+                    resolve(data);
+                    // ✅ Credits nach erfolgreichem Merge aktualisieren
+                    await refreshCredits();
+                }
+                
+                  // ✅ Prüfe auf Error oder Failed
+                if (data && (data.status === 'failed' || data.status === 'error')) {
+                    console.log('❌ MERGE ERROR! Stoppe Polling...');
+                    console.log('Error Message:', data.message);
+                    
+                    clearInterval(interval);
+                    
+                    setMergedVideoData({
+                        status: 'error',
+                        message: data.message || 'Video konnte nicht zusammengeführt werden'
+                    });
+                    
+                    reject(new Error(data.message || 'Merge failed'));
+                }
+                
+            } catch (error) {
+                console.error('Merge Polling Fehler:', error);
+                
+                setMergedVideoData(prev => ({
+                    ...prev,
+                    message: `Fehler beim Polling (Versuch ${attempts}/${maxAttempts})`
+                }));
+            }
+            
+            if (attempts >= maxAttempts) {
+                clearInterval(interval);
+                
+                setMergedVideoData({
+                    status: 'error',
+                    message: 'Timeout: Video konnte nicht generiert werden (10 Min)'
+                });
+                
+                alert('Timeout: Das Video konnte nicht rechtzeitig generiert werden.');
+                reject(new Error('Polling timeout'));
+            }
+        }, 10000);
+    });
+};
+
+// Download Funktion für finales Video
+const downloadFinalVideo = async () => {
+    const downloadUrl = mergedVideoData?.downloadUrl || mergedVideoData?.previewUrl;
+    if (!downloadUrl) return;
+    
+    try {
+        console.log('Lade Video herunter...');
+        
+        // Fetch das Video als Blob
+        const response = await fetch(downloadUrl);
+        if (!response.ok) throw new Error('Download fehlgeschlagen');
+        
+        const blob = await response.blob();
+        
+        // Erstelle einen Blob-URL
+        const blobUrl = URL.createObjectURL(blob);
+        
+        // Erstelle Download-Link
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = `${projectTitle || 'final-video'}.mp4`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // Cleanup: Blob-URL freigeben nach kurzem Timeout
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+        
+        console.log('Download gestartet!');
+    } catch (error) {
+        console.error('Download-Fehler:', error);
+        alert('Fehler beim Herunterladen des Videos. Bitte versuchen Sie es erneut oder öffnen Sie das Video im Browser.');
+    }
+};
+
+// Modal schließen ohne Download
+const closeMergeModal = () => {
+    setShowMergeSuccessModal(false);
+    setMergedVideoData(null);
+};
+
+// AI Wizard Funktionen
+const handleAiWizardFileUpload = (files) => {
+    const newFiles = Array.from(files).filter(file => {
+        const validTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+        return validTypes.includes(file.type);
+    });
+    
+    const combined = [...aiWizardFiles, ...newFiles].slice(0, 5);
+    setAiWizardFiles(combined);
+};
+
+const removeAiWizardFile = (index) => {
+    setAiWizardFiles(aiWizardFiles.filter((_, i) => i !== index));
+};
+
+const resetAiWizard = () => {
+    setAiWizardStep(1);
+    setAiWizardFiles([]);
+    setAiWizardPrompt('');
+    setAiWizardLoading(false);
+};
+
+const submitAiWizard = async () => {
+    setAiWizardLoading(true);
+    
+    try {
+        const formData = new FormData();
+        
+        aiWizardFiles.forEach((file, index) => {
+            formData.append(`document_${index + 1}`, file);
+        });
+        
+        formData.append('prompt', aiWizardPrompt);
+        formData.append('token', currentUser.accessToken);
+        formData.append('companyName', currentUser.companyName);
+        
+        const response = await fetch('https://n8n.srv793158.hstgr.cloud/webhook/ai-wizzard', {
+            method: 'POST',
+            body: formData,
+            mode: 'cors'
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (debugMode) {
+            console.log('AI Wizard Response:', result);
+        }
+        
+        // TODO: Szenen aus Response erstellen
+        // result sollte ein Array von Szenen enthalten
+        
+        alert('Vorschlag wurde generiert! (Integration folgt)');
+        
+        setShowAiModal(false);
+        resetAiWizard();
+        
+    } catch (error) {
+        console.error('AI Wizard Fehler:', error);
+        alert('Fehler beim Generieren des Vorschlags: ' + error.message);
+    } finally {
+        setAiWizardLoading(false);
+    }
+};
+
+// MODAL COMPONENT (im JSX return hinzufügen)
+{showMergeSuccessModal && mergedVideoData && (
+    <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-lg w-full p-8 shadow-2xl">
+            {/* Celebration Icon */}
+            <div className="flex flex-col items-center mb-6">
+                <div className="w-20 h-20 bg-gradient-to-br from-green-400 to-blue-500 rounded-full flex items-center justify-center mb-4 animate-bounce">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-12 h-12">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                    🎉 Dein Video ist fertig!
+                </h2>
+                <p className="text-gray-600 text-center">
+                    {projectTitle || 'Dein Projekt'} wurde erfolgreich zusammengeführt
+                </p>
+            </div>
+            
+            {/* Video Preview (optional) */}
+            {mergedVideoData.previewUrl && (
+                <div className="mb-6">
+                    <div className="video-container border border-gray-300 rounded-lg overflow-hidden">
+                        <video 
+                            controls 
+                            src={mergedVideoData.previewUrl}
+                            className="w-full"
+                        />
+                    </div>
+                </div>
+            )}
+            
+            {/* Actions */}
+            <div className="space-y-3">
+                <button
+                    onClick={downloadFinalVideo}
+
+                    className="w-full px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold text-lg flex items-center justify-center gap-3 shadow-lg hover:shadow-xl transition-all"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Jetzt herunterladen
+                </button>
+                
+                <button
+    onClick={() => {
+        closeMergeModal();
+        handleRestart();
+    }}
+    className="w-full px-4 py-2 text-gray-500 hover:text-gray-700 text-sm"
+>
+                    Video verwerfen
+                </button>
+            </div>
+        </div>
+    </div>
+)}
+
+            const totalCreditCost = scenes.reduce((sum, scene) => {
+                const cost = creditCosts[scene.type] || 0;
+                return sum + cost;
+            }, 0) + creditCosts.merge;
+
+            const totalDurationEstimate = scenes.length * 10;
+            const formattedTime = `${Math.floor(totalDurationEstimate / 60).toString().padStart(2, '0')}:${(totalDurationEstimate % 60).toString().padStart(2, '0')}`;
+            
+            const handleMusicPlay = (music) => {
+    if (playingMusic && playingMusic.id === music.subMusicId) {
+        // Stoppe, wenn dieselbe Musik wieder geklickt wird
+        playingMusic.audio.pause();
+        playingMusic.audio.currentTime = 0;
+        setPlayingMusic(null);
+    } else {
+        // Stoppe vorherige Musik, wenn vorhanden
+        if (playingMusic) {
+            playingMusic.audio.pause();
+            playingMusic.audio.currentTime = 0;
+        }
+        // Starte neue Musik
+        const audio = new Audio(music.musicUrl);
+        audio.volume = 0.5; // Feste 50% Lautstärke
+        audio.loop = false; // Nur einmal abspielen als Vorschau
+        
+        // Erst Audio-Objekt speichern, dann abspielen
+        const newPlayingMusic = { id: music.subMusicId, audio };
+        setPlayingMusic(newPlayingMusic);
+        
+        audio.play().catch(err => {
+            console.warn('Musik konnte nicht abgespielt werden:', err);
+            setPlayingMusic(null);
+        });
+        
+        // Nach Ende automatisch stoppen
+        audio.onended = () => {
+            setPlayingMusic(null);
+        };
+    }
+};
+
+            useEffect(() => {
+                if (playingMusic) {
+                    playingMusic.audio.volume = musicVolume / 100;
+                }
+            }, [musicVolume, playingMusic]);
+
+            const handleDragStart = (e, index) => {
+                setDraggedItem(scenes[index]);
+                e.dataTransfer.effectAllowed = "move";
+            };
+
+            const handleDragOver = (e, index) => {
+                e.preventDefault();
+                setDragOverIndex(index);
+            };
+
+            const handleDrop = (e, dropIndex) => {
+                e.preventDefault();
+                if (!draggedItem) return;
+
+                const dragIndex = scenes.indexOf(draggedItem);
+                const newScenes = [...scenes];
+                newScenes.splice(dragIndex, 1);
+                newScenes.splice(dropIndex, 0, draggedItem);
+                setScenes(newScenes);
+                setDraggedItem(null);
+                setDragOverIndex(null);
+            };
+
+            const handleDragEnd = () => {
+                setDraggedItem(null);
+                setDragOverIndex(null);
+            };
+            
+            const renderIcon = (iconName) => {
+                const icons = {
+                    'video-upload': (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M15 10l4.553-2.276A1 1 0 0 1 21 8.618v6.764a1 1 0 0 1-1.447.894L15 14.077V19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+                    ),
+                    'image-overlay': (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                    ),
+                    'image-avatar': (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 10s-1.5-2-3.5-2a2.5 2.5 0 0 0-2.5 2.5c0 1.25.5 2.5 2.5 2.5s3.5-1.25 3.5-2.5zm-5 0h.01"></path><circle cx="12" cy="12" r="10"></circle></svg>
+                    ),
+                    'ai-video': (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 16a6 6 0 1 1 6-6 6 6 0 0 1-6 6z"></path><path d="M12 8a4 4 0 0 0-4 4"></path></svg>
+                    ),
+                    'merge': (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M2 12s4 8 10 8 10-8 10-8-4-8-10-8S2 12 2 12zm0 0a3 3 0 1 0 3-3 3 3 0 0 0-3 3z"></path><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"></path></svg>
+                    ),
+                    'settings': (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 16a6 6 0 1 1 6-6 6 6 0 0 1-6 6z"></path><path d="M12 8a4 4 0 0 0-4 4"></path></svg>
+                    )
+                };
+                return icons[iconName] || null;
+            };
+
+            const renderStatusIcon = (status) => {
+                switch (status) {
+                    case 'pending':
+                        return (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-gray-400">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                        );
+                    case 'generating':
+                        return (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-blue-500 animate-spin">
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                            </svg>
+                        );
+                    case 'completed':
+                        return (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-green-500">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-8.62"></path>
+                                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                            </svg>
+                        );
+                    case 'error':
+                        return (
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-red-500">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="15" y1="9" x2="9" y2="15"></line>
+                                <line x1="9" y1="9" x2="15" y2="15"></line>
+                            </svg>
+                        );
+                    default:
+                        return null;
+                }
+            };
+            
+            const renderSceneTypeLabel = (type) => {
+                switch (type) {
+                    case 'video-upload': return 'Video-Upload';
+                    case 'image-overlay': return 'Bild mit Text/Audio';
+                    case 'image-avatar': return 'Bild mit Avatar';
+                    case 'ai-video': return 'KI-generiertes Video';
+                    default: return 'Unbekannt';
+                }
+            };
+
+// NEU: Zentrale Video-Anzeige für alle Szenentypen
+const renderVideoDisplay = (scene) => {
+    const isGenerating = scene.status === 'generating';
+    const isCompleted = scene.status === 'completed';
+    const isError = scene.status === 'error';
+    const isUpload = scene.type === 'upload';
+    
+    return (
+        <>
+            {/* Loading State - Video wird generiert */}
+            {isGenerating && (
+                <div className="mt-4">
+                    <h4 className="text-md font-semibold text-gray-800 mb-2">
+                        {isUpload ? 'Hochgeladenes Video' : 'Generiertes Video'}
+                    </h4>
+                    <div className="border border-gray-300 rounded-md overflow-hidden bg-gray-50 flex items-center justify-center p-12">
+                        <div className="text-center">
+                            <div className="inline-block animate-spin rounded-full h-16 w-16 border-4 border-gray-300 border-t-green-500 mb-4"></div>
+                            <p className="text-gray-600 text-lg">
+                                Video wird generiert, bitte haben Sie ein paar Minuten Geduld.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+              {/* Completed State - Video fertig */}
+            {isCompleted && scene.videoUrl && !isGenerating && (
+                <div className="mt-4">
+                    <h4 className="text-md font-semibold text-gray-800 mb-2">
+                        {isUpload ? 'Hochgeladenes Video' : 'Generiertes Video'}
+                    </h4>
+                    <div className="video-container border border-gray-300 rounded-md overflow-hidden">
+                        <video key={scene.videoUrl} controls src={scene.videoUrl} />
+                    </div>
+                </div>
+            )}
+
+            {/* Error State */}
+            {isError && (
+                <div className="mt-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded">
+                    Fehler: {scene.errorMessage}
+                    <button 
+                        onClick={() => regenerateScene(scene.id)} 
+                        className="ml-4 text-blue-700 hover:underline font-medium"
+                    >
+                        Nochmals versuchen
+                    </button>
+                </div>
+            )}
+        </>
+    );
+};
+
+
+            const renderSceneForm = (scene, index) => {
+    const isGenerating = scene.status === 'generating';
+    const isCompleted = scene.status === 'completed';
+    const isError = scene.status === 'error';
+    
+    // Upload-Szene (wie bisher)
+    if (scene.type === 'upload') {
+        return (
+            <div 
+                key={scene.id} 
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDrop={(e) => handleDrop(e, index)}
+                onDragEnd={handleDragEnd}
+                className={`bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200 relative mb-6 draggable-scene ${dragOverIndex === index ? 'drag-over' : ''} ${isGenerating ? 'opacity-75 cursor-not-allowed' : ''}`}
+            >
+         {/* ✅ Header in einer Zeile: [Thumbnail] | Titel | Icons */}
+                <div className="flex items-center justify-between gap-4 mb-4">
+                    {/* Links: Thumbnail + Titel */}
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                        {/* Thumbnail (nur wenn Video vorhanden) */}
+                        {scene.videoUrl && (
+                            <video 
+                                src={scene.videoUrl} 
+                                className="w-20 h-14 object-cover rounded border flex-shrink-0"
+                                muted
+                            />
+                        )}
+                        
+                        {/* Titel */}
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <h3 className="text-lg font-semibold text-gray-800 truncate">
+                                Szene {index + 1}: Video-Upload
+                            </h3>
+                            
+                            {/* Grüner Haken */}
+                            {scene.status === 'completed' && (
+                                <div className="flex items-center gap-1 text-green-600 flex-shrink-0">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                                        <polyline points="20 6 9 17 4 12"></polyline>
+                                    </svg>
+                                    <span className="text-sm font-medium">Fertig</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {/* Rechts: Icons + Toggle */}
+                    <div className="flex items-center space-x-2 flex-shrink-0">
+                        {renderStatusIcon(scene.status)}
+                        
+                        {/* Delete Button */}
+                        <button 
+                            onClick={() => removeScene(scene.id)} 
+                            className="text-red-500 hover:text-red-700 disabled:opacity-50 p-1"
+                            disabled={isGenerating}
+                            title="Szene löschen"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                        </button>
+                        
+                        {/* Drag Handle */}
+                        <div className="drag-handle cursor-grab text-gray-400">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                                <line x1="3" y1="12" x2="21" y2="12"></line>
+                                <line x1="3" y1="6" x2="21" y2="6"></line>
+                                <line x1="3" y1="18" x2="21" y2="18"></line>
+                            </svg>
+                        </div>
+                        
+                        {/* Collapse Button */}
+                        <button
+                            onClick={() => toggleCollapse(scene.id)}
+                            className="p-1 hover:bg-gray-200 rounded transition-colors"
+                            title={collapsedScenes.has(scene.id) ? "Aufklappen" : "Einklappen"}
+                        >
+                            <svg 
+                                xmlns="http://www.w3.org/2000/svg" 
+                                viewBox="0 0 24 24" 
+                                fill="none" 
+                                stroke="currentColor" 
+                                strokeWidth="2" 
+                                strokeLinecap="round" 
+                                strokeLinejoin="round" 
+                                className={`w-5 h-5 text-gray-600 transition-transform ${collapsedScenes.has(scene.id) ? '' : 'rotate-180'}`}
+                            >
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+       {/* ✅ NEU: Nur anzeigen wenn NICHT collapsed */}
+                {!collapsedScenes.has(scene.id) && (
+                    <div className="space-y-4">
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">Video hochladen</label>
+                                <input
+                                    type="file"
+                                    accept="video/mp4,video/quicktime,video/webm"
+                                    onChange={(e) => updateScene(scene.id, { 
+                                        videoFile: e.target.files[0], 
+                                        videoUrl: URL.createObjectURL(e.target.files[0]) 
+                                    })}
+                                    className="w-full text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                                    disabled={isGenerating || isCompleted}
+                                />
+                            </div>
+                            <div className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    id={`rights-${scene.id}`}
+                                    checked={scene.rightsConfirmed}
+                                    onChange={(e) => updateScene(scene.id, { rightsConfirmed: e.target.checked })}
+                                    className="form-checkbox h-4 w-4 text-blue-600"
+                                    disabled={isGenerating || isCompleted}
+                                />
+                                <label htmlFor={`rights-${scene.id}`} className="ml-2 block text-sm text-gray-900">
+                                    Ich bestätige, die Rechte an diesem Video zu besitzen.
+                                </label>
+                            </div>
+                        </div>
+                        
+                        {/* Status und Aktionen */}
+                        <div className="flex justify-end mt-4 space-x-2">
+                            {isCompleted ? (
+                                <button 
+                                    onClick={() => regenerateScene(scene.id)} 
+                                    className="px-4 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 disabled:opacity-50"
+                                    disabled={isGenerating}
+                                >
+                                    Anderes Video wählen
+                                </button>
+                            ) : (
+                                <button 
+                                    onClick={() => generateScene(scene.id)} 
+                                    className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50"
+                                    disabled={isGenerating || !scene.rightsConfirmed || !scene.videoFile}
+                                >
+                                    {isGenerating ? 'Wird hochgeladen...' : 'Hochladen'}
+                                </button>
+                            )}
+                        </div>
+                                     
+                    
+                    {/* Video-Anzeige - INNERHALB vom Collapse */}
+                    {renderVideoDisplay(scene)}
+                </div>
+            )} {/* ✅ Schließt den Collapse-Wrapper */}
+        </div>
+    );
+}
+        // AI-Video Szene
+if (scene.type === 'ai-video') {
+    return (
+        <div 
+            key={scene.id} 
+            draggable
+            onDragStart={(e) => handleDragStart(e, index)}
+            onDragOver={(e) => handleDragOver(e, index)}
+            onDrop={(e) => handleDrop(e, index)}
+            onDragEnd={handleDragEnd}
+            className={`bg-purple-50 p-6 rounded-lg shadow-sm border border-purple-200 relative mb-6 draggable-scene ${dragOverIndex === index ? 'drag-over' : ''} ${isGenerating ? 'opacity-75 cursor-not-allowed' : ''}`} >       
+            
+            
+            {/* ✅ NEU: Header mit Collapse-Button, Status und Controls */}
+<div className="flex items-center justify-between mb-4">
+    <div className="flex items-center gap-3">
+        {/* Collapse Button */}
+        <button
+            onClick={() => toggleCollapse(scene.id)}
+            className="p-1 hover:bg-gray-200 rounded transition-colors"
+            title={collapsedScenes.has(scene.id) ? "Aufklappen" : "Einklappen"}
+        >
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className={`w-5 h-5 text-gray-600 transition-transform ${collapsedScenes.has(scene.id) ? '' : 'rotate-180'}`}
+            >
+                <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+        </button>
+        
+        {/* Titel */}
+        <h3 className="text-xl font-semibold text-gray-800">
+            Szene {index + 1}: {scene.type === 'upload' ? 'Video-Upload' : scene.type === 'ai-video' ? 'AI Video' : scene.templateName || 'Template'}
+        </h3>
+        
+        {/* ✅ Grüner Haken bei Completed */}
+        {scene.status === 'completed' && (
+            <div className="flex items-center gap-1 text-green-600">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span className="text-sm font-medium">Fertig</span>
+            </div>
+        )}
+    </div>
+    
+    {/* Controls rechts */}
+    <div className="flex items-center space-x-2">
+        {renderStatusIcon(scene.status)}
+        
+        {/* Delete Button */}
+        <button 
+            onClick={() => removeScene(scene.id)} 
+            className="text-red-500 hover:text-red-700 disabled:opacity-50 p-1"
+            disabled={isGenerating}
+            title="Szene löschen"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+        </button>
+        
+        {/* Drag Handle */}
+        <div className="drag-handle cursor-grab text-gray-400">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+        </div>
+    </div>
+</div>
+
+{/* ✅ NEU: Nur anzeigen wenn NICHT collapsed */}
+{!collapsedScenes.has(scene.id) && (
+    <div className="space-y-4">
+            
+            <div className="space-y-4">
+                {/* PROMPT FÜR BEWEGUNG UND HINTERGRUNDGERÄUSCHE */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Prompt (Bewegung & Hintergrundgeräusche)
+                    </label>
+                    <textarea
+                        value={scene.prompt || ''}
+                        onChange={(e) => updateScene(scene.id, { prompt: e.target.value })}
+                        className="w-full p-2 border border-gray-300 rounded-md h-24"
+                        placeholder="Beschreiben Sie die gewünschten Bewegungen und Hintergrundgeräusche..."
+                        disabled={isGenerating || isCompleted}
+                    />
+                </div>
+                
+                {/* SPRECHTEXT FELD - NEU */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Sprechtext
+                    </label>
+                    <textarea
+                        value={scene.speechText || ''}
+                        onChange={(e) => updateScene(scene.id, { speechText: e.target.value })}
+                        className="w-full p-2 border border-gray-300 rounded-md h-24"
+                        placeholder="Text, der gesprochen werden soll..."
+                        disabled={isGenerating || isCompleted}
+                    />
+                </div>
+                
+                {/* BILD UPLOAD - NEU (Binary statt URL) */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Bild hochladen (Image to Video)
+                    </label>
+                    <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg,image/webp"
+                        onChange={(e) => {
+                            const file = e.target.files[0];
+                            if (file) {
+                                updateScene(scene.id, { 
+                                    imageFile: file,
+                                    imagePreview: URL.createObjectURL(file)
+                                });
+                            }
+                        }}
+                        className="w-full text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
+                        disabled={isGenerating || isCompleted}
+                    />
+                    {scene.imagePreview && (
+                        <div className="mt-4 p-4 border border-gray-200 rounded-md">
+                            <p className="text-sm text-gray-600 mb-2">Vorschau:</p>
+                            <img 
+                                src={scene.imagePreview} 
+                                alt="Bild Vorschau" 
+                                className="max-w-full h-auto max-h-48 mx-auto rounded"
+                            />
+                        </div>
+                    )}
+                </div>
+            </div>
+        {/* STATUS UND AKTIONEN */}
+            <div className="flex justify-end mt-4 space-x-2">
+                {isCompleted ? (
+                    <button 
+                        onClick={() => regenerateScene(scene.id)} 
+                        className="px-4 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 disabled:opacity-50"
+                        disabled={isGenerating}
+                    >
+                        Szene bearbeiten
+                    </button>
+                ) : (
+                    <button 
+                        onClick={() => generateScene(scene.id)} 
+                        className="px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 disabled:opacity-50"
+                        disabled={isGenerating || !scene.prompt}
+                    >
+                        {isGenerating ? 'Generiert...' : 'Generieren'}
+                    </button>
+                )}
+            </div>
+        </div>
+    )} {/* ✅ Schließt den Collapse-Wrapper */}
+    </div>
+);
+}
+    // Template-basierte Szene
+    return (
+        <div 
+            key={scene.id} 
+            draggable
+            onDragStart={(e) => handleDragStart(e, index)}
+            onDragOver={(e) => handleDragOver(e, index)}
+            onDrop={(e) => handleDrop(e, index)}
+            onDragEnd={handleDragEnd}
+            className={`bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200 relative mb-6 draggable-scene ${dragOverIndex === index ? 'drag-over' : ''} ${isGenerating ? 'opacity-75 cursor-not-allowed' : ''}`}
+        >
+         {/* ✅ Header in einer Zeile: Thumbnail | Titel | Icons */}
+            <div className="flex items-center justify-between gap-4 mb-4">
+                {/* Links: Thumbnail + Titel */}
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                    {/* Thumbnail */}
+                    <img 
+                        src={scene.thumbnailUrl} 
+                        alt={scene.templateName}
+                        className="w-20 h-14 object-cover rounded border flex-shrink-0"
+                    />
+                    
+                    {/* Titel */}
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <h3 className="text-lg font-semibold text-gray-800 truncate">
+                            Szene {index + 1}: {scene.templateName}
+                        </h3>
+                        
+                        {/* Grüner Haken */}
+                        {scene.status === 'completed' && (
+                            <div className="flex items-center gap-1 text-green-600 flex-shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span className="text-sm font-medium">Fertig</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+                
+                {/* Rechts: Icons + Toggle */}
+                <div className="flex items-center space-x-2 flex-shrink-0">
+                    {renderStatusIcon(scene.status)}
+                    
+                    {/* Delete Button */}
+                    <button 
+                        onClick={() => removeScene(scene.id)} 
+                        className="text-red-500 hover:text-red-700 disabled:opacity-50 p-1"
+                        disabled={isGenerating}
+                        title="Szene löschen"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                    
+                    {/* Drag Handle */}
+                    <div className="drag-handle cursor-grab text-gray-400">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </div>
+                    
+                    {/* Collapse Button */}
+                    <button
+                        onClick={() => toggleCollapse(scene.id)}
+                        className="p-1 hover:bg-gray-200 rounded transition-colors"
+                        title={collapsedScenes.has(scene.id) ? "Aufklappen" : "Einklappen"}
+                    >
+                        <svg 
+                            xmlns="http://www.w3.org/2000/svg" 
+                            viewBox="0 0 24 24" 
+                            fill="none" 
+                            stroke="currentColor" 
+                            strokeWidth="2" 
+                            strokeLinecap="round" 
+                            strokeLinejoin="round" 
+                            className={`w-5 h-5 text-gray-600 transition-transform ${collapsedScenes.has(scene.id) ? '' : 'rotate-180'}`}
+                        >
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            {/* ✅ NEU: Nur anzeigen wenn NICHT collapsed */}
+            {!collapsedScenes.has(scene.id) && (
+                <div className="space-y-4">
+                
+                
+                {Object.entries(scene.variables).map(([varName, varValue]) => {
+    const maxLength = scene.variableLengths?.[varName];
+    const currentLength = varValue?.length || 0;
+    
+    return (
+        <div key={varName}>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+                {varName}
+                {maxLength && (
+                    <span className={`text-xs ml-2 ${currentLength > maxLength ? 'text-red-500 font-bold' : 'text-gray-500'}`}>
+                        ({currentLength}/{maxLength} Zeichen)
+                    </span>
+                )}
+            </label>
+            <input
+                type="text"
+                value={varValue}
+                onChange={(e) => updateScene(scene.id, {
+                      variables: {
+                            ...scene.variables,
+                            [varName]: e.target.value
+                        }
+                    })}
+                    className={`w-full p-2 border rounded-md ${maxLength && currentLength > maxLength ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                    placeholder={varName.toLowerCase().includes('logo') || varName.toLowerCase().includes('pic') || varName.toLowerCase().includes('image')
+                        ? 'URL eingeben (z.B. https://...)' 
+                        : varName.toLowerCase().includes('color') || varName.toLowerCase().includes('farbe')
+                        ? 'Farbe eingeben (z.B. #FF0000)'
+                        : 'Text eingeben'}
+                    disabled={isGenerating || isCompleted}
+                    maxLength={maxLength || undefined}
+                />
+            </div>
+        );
+    })}
+            
+            {/* Avatar Override Option */}
+<div className="mt-4 p-4 bg-gray-50 rounded border border-gray-200">
+    <div className="flex items-center mb-2">
+        <input
+            type="checkbox"
+            id={`avatar-override-${scene.id}`}
+            checked={scene.useCustomAvatar || false}
+            onChange={(e) => updateScene(scene.id, { useCustomAvatar: e.target.checked })}
+            className="form-checkbox h-4 w-4 text-blue-600"
+            disabled={isGenerating || isCompleted}
+        />
+        <label htmlFor={`avatar-override-${scene.id}`} className="ml-2 text-sm font-medium text-gray-700">
+            Anderen Avatar für diese Szene verwenden
+        </label>
+    </div>
+    
+    {scene.useCustomAvatar && (
+        <select
+            value={scene.customAvatarId || ''}
+            onChange={(e) => updateScene(scene.id, { customAvatarId: e.target.value })}
+            className="w-full p-2 border border-gray-300 rounded-md bg-white text-sm"
+            disabled={isGenerating || isCompleted}
+        >
+            <option value="">-- Avatar wählen --</option>
+            {availableAvatars.map(avatar => (
+                <option key={avatar.subAvatarId} value={avatar.subAvatarId}>
+                    {avatar.avatarName} {avatar.isPublic ? '(Public)' : '(Firmenspezifisch)'}
+                </option>
+            ))}
+        </select>
+    )}
+</div>
+            
+            
+          {/* Video-Anzeige - zentral für alle Szenentypen */}
+{renderVideoDisplay(scene)}
+            
+            {isError && (
+                <div className="mt-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded">
+                    Fehler: {scene.errorMessage}
+                    <button 
+                        onClick={() => regenerateScene(scene.id)} 
+                        className="ml-4 text-blue-700 hover:underline font-medium"
+                    >
+                        Nochmals versuchen
+                    </button>
+                </div>
+            )}
+            
+              {/* Status und Aktionen */}
+            <div className="flex justify-end mt-4 space-x-2">
+                {isCompleted ? (
+                    <button 
+                        onClick={() => regenerateScene(scene.id)} 
+                        className="px-4 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 disabled:opacity-50"
+                        disabled={isGenerating}
+                    >
+                        Neu generieren
+                    </button>
+                ) : (
+                    <button 
+                        onClick={() => generateScene(scene.id)} 
+                        className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50"
+                        disabled={isGenerating}
+                    >
+                        {isGenerating ? 'Generiert...' : 'Generieren'}
+                    </button>
+                )}
+            </div>
+                </div>
+            )} {/* ✅ Schließt den Collapse-Wrapper */}
+        </div>
+    );
+};
+
+            return (
+                <div className="min-h-screen bg-gray-100 p-8">
+                    <header className="flex justify-between items-center mb-8">
+    <div className="flex items-center">
+        <img 
+            src="https://easy-collab.de/content-maschine/images/logo/logo.png" 
+            alt="Easy Collab Logo" 
+            className="h-8 mr-4 opacity-80"
+            onError={(e) => { e.target.style.display = 'none'; }}
+        />
+        <h1 className="text-3xl font-bold text-gray-900">Video Szenen Generator</h1>
+    </div>
+    
+    
+    <div className="flex items-center space-x-4">
+        <div className="text-sm text-gray-600 flex items-center space-x-4">
+            <span className="font-medium">Unternehmen: {currentUser.companyName}</span>
+            <span className="font-medium">Credits: {currentUser.credits}</span>
+            <span className="font-medium bg-blue-100 px-2 py-1 rounded">Lizenz: {currentUser.license}</span>
+            <span className="font-medium bg-gray-100 px-2 py-1 rounded flex items-center gap-2" title="Zugangscode">
+    Token: {currentUser.accessToken?.substring(0, 8)}...
+    <button 
+        onClick={() => {
+    navigator.clipboard.writeText(currentUser.accessToken);
+    setToastMessage('✓ Token kopiert!');
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 2000);
+}}
+        className="text-blue-600 hover:text-blue-800"
+        title="Token kopieren"
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+    </button>
+</span>
+        </div>
+        {currentUser && (
+            <button onClick={onLogout} className="text-sm text-blue-600 hover:underline">
+                Abmelden
+            </button>
+        )}
+    </div>
+</header>
+                    {/* NEU: Template Selector Modal */}
+{showTemplateSelector && (
+    <div 
+        className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+        onClick={() => setShowTemplateSelector(false)}
+    >
+        <div 
+            className="bg-white rounded-lg max-w-6xl w-full max-h-[80vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+        >
+            <div className="p-6 border-b">
+                <h2 className="text-2xl font-bold">Szene hinzufügen</h2>
+            </div>
+            
+            {/* Tabs */}
+<div className="flex border-b">
+    <button 
+        onClick={() => setSelectedTemplateTab('upload')}
+        className={`px-6 py-3 font-medium ${selectedTemplateTab === 'upload' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-600'}`}
+    >
+        Video Upload
+    </button>
+    <button 
+        onClick={() => setSelectedTemplateTab('ai')}
+        className={`px-6 py-3 font-medium ${selectedTemplateTab === 'ai' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-600'}`}
+    >
+        AI Video
+    </button>
+    <button 
+        onClick={() => setSelectedTemplateTab('public')}
+        className={`px-6 py-3 font-medium ${selectedTemplateTab === 'public' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-600'}`}
+    >
+        Öffentliche Templates ({templates.public.length})
+    </button>
+    <button 
+        onClick={() => setSelectedTemplateTab('client')}
+        className={`px-6 py-3 font-medium ${selectedTemplateTab === 'client' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-600'}`}
+    >
+        Eigene Templates ({templates.clientSpecific.length})
+    </button>
+</div>
+            
+         <div className="p-6 overflow-y-auto max-h-[50vh]">
+    {selectedTemplateTab === 'upload' ? (
+        <div className="text-center p-8">
+            <button 
+                onClick={addUploadScene}
+                className="inline-flex flex-col items-center p-6 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors"
+            >
+                <svg className="w-16 h-16 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <span className="text-lg font-medium">Video hochladen</span>
+                <span className="text-sm text-gray-500 mt-1">MP4, MOV, WebM</span>
+            </button>
+        </div>
+    ) : selectedTemplateTab === 'ai' ? (
+        <div className="text-center p-8">
+            <button 
+                onClick={() => {
+                    const newScene = {
+                        id: Date.now(),
+                        type: 'ai-video',
+                        prompt: '',
+                        imageUrl: '',
+                        status: 'pending',
+                        videoUrl: null,
+                        webhookResponse: null
+                    };
+                    setScenes([...scenes, newScene]);
+                    setShowTemplateSelector(false);
+                }}
+                className="inline-flex flex-col items-center p-6 border-2 border-dashed border-purple-300 rounded-lg hover:border-purple-500 hover:bg-purple-50 transition-colors"
+            >
+                <svg className="w-16 h-16 text-purple-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <span className="text-lg font-medium">AI Video erstellen</span>
+                <span className="text-sm text-gray-500 mt-1">Mit Prompt & Bild</span>
+            </button>
+        </div>
+    ) : (
+        <div className="grid grid-cols-3 gap-4">
+            {(selectedTemplateTab === 'public' ? templates.public : templates.clientSpecific).map(template => {
+                const variableCount = [1,2,3,4,5,6,7,8,9,10]
+                    .filter(i => template[`variable${i}`] !== null)
+                    .length;
+                
+                return (
+                    <button
+                        key={template.templateId}
+                        onClick={() => addTemplateScene(template)}
+                        className="group relative overflow-hidden rounded-lg border border-gray-200 hover:border-blue-500 transition-colors"
+                    >
+                        <img 
+                            src={template.thumbnailUrl} 
+                            alt={template.templateName}
+                            className="w-full h-40 object-cover"
+                        />
+                        <div className="p-3 bg-white">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                                {template.templateName}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-1">
+                                {variableCount} Variable{variableCount !== 1 ? 'n' : ''}
+                            </p>
+                        </div>
+                    </button>
+                );
+            })}
+        </div>
+    )}
+</div>
+            
+            <div className="p-6 border-t flex justify-end">
+                <button 
+                    onClick={() => setShowTemplateSelector(false)}
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                >
+                    Abbrechen
+                </button>
+            </div>
+        </div>
+    </div>
+)}
+                    {showWebhooks && (
+                        <div className="bg-white p-8 rounded-lg shadow-md mb-8 border border-blue-200">
+                            <h2 className="text-2xl font-bold text-gray-900 mb-4">Admin-Einstellungen</h2>
+                            
+                            {!webhooksAuthenticated ? (
+                                <form onSubmit={(e) => { e.preventDefault(); if (masterPwWebhooks === masterPassword) { setWebhooksAuthenticated(true); } else { alert('Falsches Passwort'); } }} className="flex items-center space-x-4">
+                                    <input 
+                                        type="password" 
+                                        value={masterPwWebhooks} 
+                                        onChange={(e) => setMasterPwWebhooks(e.target.value)}
+                                        placeholder="Master-Passwort"
+                                        className="p-2 border border-gray-300 rounded-md"
+                                        required
+                                    />
+                                    <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                        Entsperren
+                                    </button>
+                                </form>
+                            ) : (
+                                <>
+                                    <div className="flex space-x-2 mb-4">
+                                        <button onClick={() => setActiveTab('webhooks')} className={`py-2 px-4 rounded-md ${activeTab === 'webhooks' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'}`}>Webhooks</button>
+                                        <button onClick={() => setActiveTab('costs')} className={`py-2 px-4 rounded-md ${activeTab === 'costs' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'}`}>Kosten</button>
+                                    </div>
+                                    
+                                    {activeTab === 'webhooks' && (
+                                        <div className="space-y-4">
+                                            {Object.keys(webhooks).filter(key => !['login', 'logoUpload', 'crm'].includes(key)).map(key => (
+                                                <div key={key}>
+                                                    <label className="block text-sm font-medium text-gray-700 capitalize mb-1">
+                                                        {key.replace('-', ' ')} Webhook URL
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        value={webhooks[key]}
+                                                        onChange={(e) => onUpdateWebhooks({ ...webhooks, [key]: e.target.value })}
+                                                        className="w-full p-2 border border-gray-300 rounded-md"
+                                                        placeholder={`https://ihre-domain.com/webhook/${key}`}
+                                                    />
+                                                </div>
+                                            ))}
+                                            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                                                <p className="text-xs text-gray-600">
+                                                    <strong>Hinweis:</strong> Login, Logo-Upload und CRM Webhooks sind fest definiert und können hier nicht geändert werden.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {activeTab === 'costs' && (
+                                        <div className="space-y-4">
+                                            {Object.keys(creditCosts).map(key => (
+                                                <div key={key}>
+                                                    <label className="block text-sm font-medium text-gray-700 capitalize mb-1">{key.replace('-', ' ')} Credits</label>
+                                                    <input
+                                                        type="number"
+                                                        value={creditCosts[key]}
+                                                        onChange={(e) => updateCreditCosts({ ...creditCosts, [key]: parseInt(e.target.value) })}
+                                                        className="w-full p-2 border border-gray-300 rounded-md"
+                                                        min="0"
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    )}
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                       {/* Linke Spalte: Projekt-Einstellungen */}
+<div className="md:col-span-1 space-y-6">
+    {/* Projekt-Informationen */}
+<div className="bg-white p-6 rounded-lg shadow-md">
+    <h2 className="text-2xl font-bold text-gray-900 mb-4">Projekt-Informationen</h2>
+    <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+            Projekttitel <span className="text-red-500">*</span>
+        </label>
+        <input
+            type="text"
+            value={projectTitle}
+            onChange={(e) => setProjectTitle(e.target.value)}
+            className="w-full p-2 border border-gray-300 rounded-md"
+            placeholder="z.B. Sommerkampagne 2025"
+            required
+        />
+    </div>
+</div>
+
+   {/* Design-Einstellungen */}
+<div className="bg-white p-6 rounded-lg shadow-md">
+    <div className="flex justify-between items-center mb-4">
+        <h2 className="text-2xl font-bold text-gray-900">Design-Einstellungen</h2>
+        {!designEditMode && (
+            <button
+                onClick={() => setDesignEditMode(true)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-medium"
+            >
+                Bearbeiten
+            </button>
+        )}
+    </div>
+        
+        {/* Logo */}
+        <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Kunden-Logo</label>
+            <div className="flex items-center gap-4">
+                <div className="flex-shrink-0 w-32 h-32 border border-gray-200 rounded-md flex items-center justify-center bg-gray-50">
+                    {newLogoFile ? (
+    <img src={URL.createObjectURL(newLogoFile)} alt="Logo Vorschau" className="max-w-full max-h-full object-contain p-2" />
+) : currentLogoUrl ? (
+    <img src={currentLogoUrl} alt="Kunden-Logo" className="max-w-full max-h-full object-contain p-2" />
+) : (
+    <span className="text-gray-400 text-sm">Kein Logo</span>
+)}
+                </div>
+               {designEditMode && (
+    <div className="flex-1">
+        <input
+            type="file"
+            accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+            onChange={(e) => {
+    const file = e.target.files[0];
+    if (file) {
+        setNewLogoFile(file);
+    }
+}}
+            className="w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+        />
+        <p className="text-xs text-gray-500 mt-1">PNG, JPG oder SVG (max. 5MB)</p>
+    </div>
+)}
+            </div>
+        </div>
+
+        {/* Farben */}
+<div className="grid grid-cols-2 gap-4 mb-4">
+    <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Primärfarbe</label>
+        <button
+            onClick={() => {
+                if (designEditMode) {
+setTempColor(localPrimaryColor);
+                    setShowColorPicker('primary');
+                }
+            }}
+            disabled={!designEditMode}
+            className="w-full h-10 rounded border-2 border-gray-300 flex items-center px-3 gap-2 hover:border-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+            <div 
+                className="w-6 h-6 rounded border border-gray-400"
+                style={{ backgroundColor: localPrimaryColor }}
+
+            ></div>
+            <span className="font-mono text-sm">{localPrimaryColor}</span>
+        </button>
+    </div>
+    <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Sekundärfarbe</label>
+        <button
+            onClick={() => {
+                if (designEditMode) {
+setTempColor(localSecondaryColor);
+                    setShowColorPicker('secondary');
+                }
+            }}
+            disabled={!designEditMode}
+            className="w-full h-10 rounded border-2 border-gray-300 flex items-center px-3 gap-2 hover:border-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+            <div 
+                className="w-6 h-6 rounded border border-gray-400"
+                style={{ backgroundColor: localSecondaryColor }}
+            ></div>
+            <span className="font-mono text-sm">{localSecondaryColor}</span>
+        </button>
+    </div>
+</div>
+
+        {/* Speichern Button */}
+        {designEditMode && (
+    <div className="flex gap-2">
+        <button
+            onClick={() => setDesignEditMode(false)}
+            className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium"
+        >
+            Abbrechen
+        </button>
+        <button
+            onClick={async () => {
+                const DESIGN_WEBHOOK_URL = "https://n8n.srv793158.hstgr.cloud/webhook/design-anpassung-cc";
+                
+                const formData = new FormData();
+if (newLogoFile) {
+    formData.append('logo', newLogoFile);
+} else if (logoFile && typeof logoFile !== 'string') {
+    formData.append('logo', logoFile);
+}
+                formData.append('designData', JSON.stringify({
+                    primaryColor: localPrimaryColor,
+                    secondaryColor: localSecondaryColor,
+                    token: currentUser.accessToken,
+                    companyName: currentUser.companyName,
+                    companyId: currentUser.companyId
+                }));
+
+               try {
+    const response = await fetch(DESIGN_WEBHOOK_URL, {
+        method: 'POST',
+        body: formData,
+        mode: 'cors'
+    });
+    
+    // Response als Text lesen
+    const responseText = await response.text();
+    console.log('Response Status:', response.status);
+    console.log('Response Body:', responseText);
+    
+    // Response als JSON parsen
+    let result;
+    try {
+        result = JSON.parse(responseText);
+    } catch {
+        result = {};
+    }
+    
+  console.log('Design-Update Response:', result);
+
+if (response.status === 200) {
+    // ✅ Lokale Variablen für sofortige Verwendung
+    const newLogoUrl = result.logoUrl || currentLogoUrl;
+    const newPrimaryColor = result.primaryColor || localPrimaryColor;
+    const newSecondaryColor = result.secondaryColor || localSecondaryColor;
+    
+    // Logo aktualisieren, falls vom Server zurückgegeben
+    if (result.logoUrl) {
+        setCurrentLogoUrl(result.logoUrl);
+    }
+    
+    // Farben aktualisieren, falls vom Server zurückgegeben
+    if (result.primaryColor) {
+        setLocalPrimaryColor(result.primaryColor);
+    }
+    if (result.secondaryColor) {
+        setLocalSecondaryColor(result.secondaryColor);
+    }
+    // ✅ NEU: currentUser aktualisieren mit neuen Design-Werten
+    // ✅ NEU: currentUser aktualisieren mit neuen Design-Werten
+    const updatedUser = {
+        ...currentUser,
+        logoUrl: newLogoUrl,
+        primaryColor: newPrimaryColor,
+        secondaryColor: newSecondaryColor
+    };
+    onUpdateUser(updatedUser);
+    
+    // ✅ NEU: Synchronisiere alle Szenen mit neuen Design-Einstellungen
+  setScenes(prevScenes => prevScenes.map(scene => {
+            if (scene.type === 'template' && scene.variables) {
+                const updatedVariables = { ...scene.variables };
+                
+ // Logo aktualisieren wenn vorhanden
+                if (updatedVariables.hasOwnProperty('Logo')) {
+                    updatedVariables.Logo = newLogoUrl;
+                }
+                
+                // Color1 aktualisieren wenn vorhanden
+                if (updatedVariables.hasOwnProperty('Color1')) {
+                    updatedVariables.Color1 = newPrimaryColor;
+                }
+                
+                return {
+                    ...scene,
+                    variables: updatedVariables
+                };
+            }
+            return scene;
+        }));
+    
+ setToastMessage('✓ Design-Einstellungen gespeichert!');
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 2000);
+    setDesignEditMode(false);
+    setNewLogoFile(null);
+} else {
+    throw new Error(`HTTP ${response.status}`);
+}
+                } catch (error) {
+                    console.error('Design-Update-Fehler:', error);
+                    alert('Fehler beim Speichern der Design-Einstellungen');
+                }
+            }}
+            className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium"
+        >
+            Speichern
+        </button>
+    </div>
+)}
+    </div>
+
+    {/* Avatar Auswahl */}
+    <div className="bg-white p-6 rounded-lg shadow-md">
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">Avatar auswählen <span className="text-red-500">*</span></h2>
+        <div className="border border-gray-300 rounded-md max-h-64 overflow-y-auto">
+            {availableAvatars.map(avatar => (
+                <div 
+                    key={avatar.subAvatarId}
+                    className={`flex items-center justify-between p-3 hover:bg-gray-50 border-b last:border-b-0 ${selectedAvatar === avatar.subAvatarId ? 'bg-blue-50' : ''}`}
+                >
+                    <div className="flex items-center gap-3 flex-1">
+                        <video 
+                            src={avatar.thumbnailUrl} 
+                            className="w-16 h-12 object-cover rounded"
+                            muted
+                            loop
+                            onMouseEnter={(e) => e.target.play()}
+                            onMouseLeave={(e) => { e.target.pause(); e.target.currentTime = 0; }}
+                        />
+                        <div>
+                            <div className="font-medium text-sm">{avatar.avatarName}</div>
+                            <div className="text-xs text-gray-500">
+                                {avatar.isPublic ? '(Public)' : '(Firmenspezifisch)'}
+                            </div>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => updateSelectedAvatar(avatar.subAvatarId)}
+                        className={`px-3 py-1 text-sm rounded ${selectedAvatar === avatar.subAvatarId ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                    >
+                        {selectedAvatar === avatar.subAvatarId ? '✓ Ausgewählt' : 'Auswählen'}
+                    </button>
+                </div>
+            ))}
+        </div>
+        {!selectedAvatar && (
+            <p className="text-sm text-red-500 mt-2">Bitte wählen Sie einen Avatar aus</p>
+        )}
+    </div>
+
+    {/* Musik Einstellungen */}
+    <div className="bg-white p-6 rounded-lg shadow-md">
+    <h2 className="text-2xl font-bold text-gray-900 mb-4">Musik</h2>
+    <div className="flex items-center mb-4">
+        <input
+            type="checkbox"
+            id="music-enabled"
+            checked={musicEnabled}
+            onChange={(e) => {
+                updateMusicEnabled(e.target.checked);
+                if (!e.target.checked && playingMusic) {
+                    playingMusic.audio.pause();
+                    playingMusic.audio.currentTime = 0;
+                    setPlayingMusic(null);
+                }
+            }}
+            className="form-checkbox h-5 w-5 text-blue-600"
+        />
+        <label htmlFor="music-enabled" className="ml-2 block text-md text-gray-900 font-medium">
+            Hintergrundmusik aktivieren
+        </label>
+    </div>
+    {musicEnabled && (
+        <div className="space-y-4">
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Musik auswählen</label>
+                <div className="border border-gray-300 rounded-md max-h-48 overflow-y-auto">
+                    {backgroundMusic.map(music => (
+                        <div 
+                            key={music.subMusicId}
+                            className={`flex items-center justify-between p-3 hover:bg-gray-50 border-b last:border-b-0 ${selectedMusic === music.subMusicId ? 'bg-blue-50' : ''}`}
+                        >
+                            <div className="flex-1">
+                                <div className="font-medium text-sm">{music.musicName}</div>
+                                <div className="text-xs text-gray-500">
+                                    {music.isPublic ? '(Public)' : '(Firmenspezifisch)'}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => handleMusicPlay(music)}
+                                    className="p-2 text-blue-500 hover:text-blue-700"
+                                    title="Vorschau"
+                                >
+                                    {playingMusic && playingMusic.id === music.subMusicId ? (
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                                            <path d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"></path>
+                                        </svg>
+                                    ) : (
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                                            <path d="M8 5v14l11-7L8 5z"></path>
+                                        </svg>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => updateSelectedMusic(music.subMusicId)}
+                                    className={`px-3 py-1 text-sm rounded ${selectedMusic === music.subMusicId ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                                >
+                                    {selectedMusic === music.subMusicId ? '✓ Ausgewählt' : 'Auswählen'}
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+            <button
+                onClick={() => setShowMusicUploadModal(true)}
+                className="w-full p-2 border-2 border-dashed border-blue-300 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
+            >
+                + Eigene Musik hochladen
+            </button>
+        </div>
+    )}
+</div>
+</div>
+    
+    
+                        {/* Mittlere Spalte: Szenen-Editor */}
+    <div className="md:col-span-2">
+    <div className="bg-white p-8 rounded-lg shadow-md mb-8">
+        <div className="flex justify-between items-center mb-4">
+            <div>
+                <h2 className="text-2xl font-bold text-gray-900">Szenen-Liste</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                    Ziehen Sie Szenen, um die Reihenfolge zu ändern.
+                </p>
+            </div>
+            
+            {/* Buttons rechts */}
+              {/* Restart-Button rechts */}
+            {scenes.length > 0 && (
+                <button
+                    onClick={() => setShowRestartConfirmModal(true)}
+                    className="p-2 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                    title="Alle Szenen löschen und neu starten"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-gray-600">
+                        <polyline points="1 4 1 10 7 10"></polyline>
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                    </svg>
+                </button>
+            )}
+        </div>
+                                {scenes.map((scene, index) => renderSceneForm(scene, index))}
+                             {scenes.length === 0 ? (
+    /* Zwei Buttons wenn keine Szenen vorhanden */
+    <div className="grid grid-cols-2 gap-3">
+        <button
+            onClick={() => setShowTemplateSelector(true)}
+            className="py-3 bg-gray-200 text-gray-700 font-semibold rounded-md hover:bg-gray-300 transition-colors"
+        >
+            + Szene hinzufügen
+        </button>
+        
+        <button
+            onClick={() => setShowAiModal(true)}
+            className="py-3 bg-purple-50 border-2 border-purple-200 text-gray-800 font-semibold rounded-md hover:bg-purple-100 transition-colors flex items-center justify-center gap-2"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path>
+                <path d="M5 3v4"></path>
+                <path d="M19 17v4"></path>
+                <path d="M3 5h4"></path>
+                <path d="M17 19h4"></path>
+            </svg>
+            AI-Wizard
+        </button>
+    </div>
+) : (
+    /* Nur ein Button wenn Szenen vorhanden */
+    <button
+        onClick={() => setShowTemplateSelector(true)}
+        className="w-full py-3 bg-gray-200 text-gray-700 font-semibold rounded-md hover:bg-gray-300 transition-colors"
+    >
+        + Szene hinzufügen
+    </button>
+)}
+                            </div>
+
+                            {/* Aktionen */}
+                            <div className="bg-white p-8 rounded-lg shadow-md">
+                        
+                                <h2 className="text-2xl font-bold text-gray-900 mb-4">Video erstellen</h2>
+                                <div className="flex justify-between items-center text-gray-600 mb-4">
+                                    <span>Voraussichtliche Kosten: <span className="font-bold text-lg text-blue-600">{totalCreditCost} Credits</span></span>
+                                    <span>Geschätzte Dauer: <span className="font-bold text-lg">{formattedTime}</span></span>
+                                </div>
+                                <button
+                                    onClick={() => setShowPreviewModal(true)}
+                                    className="w-full px-6 py-3 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                                    disabled={scenes.some(s => s.status !== 'completed')}
+                                >
+                                    Vorschau & Zusammenführen ({creditCosts.merge} Credits)
+                                </button>
+                                {scenes.some(s => s.status !== 'completed') && (
+                                    <p className="mt-2 text-sm text-red-500">
+                                        Alle Szenen müssen generiert sein, bevor Sie sie zusammenführen können.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    {/* Footer mit Admin-Controls */}
+{/* Footer mit Admin-Controls */}
+<footer className="mt-12 pt-6 border-t border-gray-200">
+    <div className="flex justify-center items-center gap-4">
+        <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input
+                type="checkbox"
+                checked={debugMode}
+                onChange={(e) => setDebugMode(e.target.checked)}
+                className="rounded"
+            />
+            Debug-Modus
+        </label>
+        <button 
+            onClick={() => setShowWebhooks(!showWebhooks)} 
+            className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 text-sm"
+        >
+            ⚙️ Admin-Einstellungen
+        </button>
+    </div>
+</footer>
+
+{/* Preview Modal - Video Playlist */}
+{showPreviewModal && (
+    <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="p-6 border-b">
+                <h2 className="text-2xl font-bold text-gray-900">Video-Vorschau</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                    Szene {currentPreviewIndex + 1} von {scenes.filter(s => s.status === 'completed').length}
+                </p>
+            </div>
+            
+           {/* Video Player */}
+            <div className="flex-1 bg-black flex items-center justify-center p-6 overflow-auto relative">
+                {(() => {
+                    const completedScenes = scenes.filter(s => s.status === 'completed');
+                    const currentScene = completedScenes[currentPreviewIndex];
+                    
+                    return currentScene ? (
+                        <div className="w-full max-w-3xl relative">
+                            <video 
+                                key={currentScene.videoUrl}
+                                ref={(el) => {
+                                    if (el && isPreviewPlaying) {
+                                        el.play();
+                                    }
+                                }}
+                                src={currentScene.videoUrl}
+                                className="w-full rounded"
+                                onEnded={() => {
+                                    if (currentPreviewIndex < completedScenes.length - 1) {
+                                        setCurrentPreviewIndex(currentPreviewIndex + 1);
+                                        setIsPreviewPlaying(true);
+                                    } else {
+                                        setIsPreviewPlaying(false);
+                                    }
+                                }}
+                                onPlay={() => setIsPreviewPlaying(true)}
+                                onPause={() => setIsPreviewPlaying(false)}
+                            />
+                            
+                            {/* Play/Pause Overlay Button */}
+                            {!isPreviewPlaying && (
+                                <button
+                                    onClick={() => {
+                                        const video = document.querySelector('video');
+                                        if (video) {
+                                            video.play();
+                                            setIsPreviewPlaying(true);
+                                        }
+                                    }}
+                                    
+
+                                    className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 hover:bg-opacity-40 transition-all group"
+                                >
+                                    <div className="w-20 h-20 bg-white bg-opacity-90 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 text-blue-600 ml-1">
+                                            <path d="M8 5v14l11-7z"/>
+                                        </svg>
+                                    </div>
+                                </button>
+                            )}
+                            
+                            {/* Preload nächstes Video - hidden video tag */}
+                            {currentPreviewIndex < completedScenes.length - 1 && (
+                                <video 
+                                    src={completedScenes[currentPreviewIndex + 1].videoUrl}
+                                    preload="auto"
+                                    style={{ display: 'none' }}
+                                />
+                            )}
+                            
+                            <div className="mt-4 text-white text-center">
+                                <p className="font-medium">
+                                    {currentScene.type === 'upload' 
+                                        ? 'Video-Upload' 
+                                        : currentScene.type === 'ai-video' 
+                                        ? 'AI Video' 
+                                        : currentScene.templateName || 'Template'}
+                                </p>
+                            </div>
+                        </div>
+                    ) : null;
+                })()}
+            </div>
+            
+            {/* Timeline/Playlist */}
+            <div className="p-4 bg-gray-50 border-t">
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                    {scenes.filter(s => s.status === 'completed').map((scene, idx) => (
+                        <button
+                            key={scene.id}
+                            onClick={() => setCurrentPreviewIndex(idx)}
+                            className={`flex-shrink-0 w-24 h-16 rounded border-2 overflow-hidden ${
+                                idx === currentPreviewIndex 
+                                    ? 'border-blue-500 ring-2 ring-blue-300' 
+                                    : 'border-gray-300 hover:border-gray-400'
+                            }`}
+                        >
+                            {scene.type === 'template' && scene.thumbnailUrl ? (
+                                <img 
+                                    src={scene.thumbnailUrl} 
+                                    alt={`Szene ${idx + 1}`}
+                                    className="w-full h-full object-cover"
+                                />
+                            ) : (
+                                <video 
+                                    src={scene.videoUrl} 
+                                    className="w-full h-full object-cover"
+                                    muted
+                                />
+                            )}
+                        </button>
+                    ))}
+                </div>
+            </div>
+            
+            {/* Info & Actions */}
+            <div className="p-6 bg-gray-50 border-t">
+                <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                    <div className="flex items-start gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        <div className="text-sm text-blue-800">
+                            <p className="font-medium mb-1">Hinweis zur Vorschau</p>
+                            <p>Die Hintergrundmusik und professionellen Übergänge werden erst beim finalen Zusammenführen hinzugefügt. Diese Vorschau zeigt nur die Reihenfolge der Videos.</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div className="flex gap-3">
+                    <button
+                        onClick={() => {
+                            setShowPreviewModal(false);
+                            setCurrentPreviewIndex(0);
+                            setIsPreviewPlaying(false);
+                        }}
+                        className="flex-1 px-4 py-3 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium"
+                    >
+                        Zurück
+                    </button>
+                    <button
+                        onClick={() => {
+                            setShowPreviewModal(false);
+                            setCurrentPreviewIndex(0);
+                            setIsPreviewPlaying(false);
+                            mergeVideos();
+                        }}
+                        className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium"
+                    >
+                        Videos zusammenführen ({creditCosts.merge} Credits)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+)}
+
+{showMergeSuccessModal && mergedVideoData && (
+    <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-lg w-full p-8 shadow-2xl">
+            
+            {mergedVideoData.status === 'processing' && (
+                <div className="text-center">
+                    <div className="flex justify-center mb-6">
+                        <div className="animate-spin h-20 w-20 border-4 border-blue-500 border-t-transparent rounded-full"></div>
+                    </div>
+                    
+                    <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                        Video wird erstellt...
+                    </h2>
+                    
+                    <p className="text-gray-600 mb-4">
+                        {mergedVideoData.message || 'Bitte haben Sie Geduld, dies kann einige Minuten dauern.'}
+                    </p>
+                    
+                    {mergedVideoData.executionId && debugMode && (
+                        <p className="text-xs text-gray-400 font-mono">
+                            Execution ID: {mergedVideoData.executionId}
+                        </p>
+                    )}
+                    
+                    <div className="flex justify-center gap-2 mt-6">
+                        <div className="w-3 h-3 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></div>
+                        <div className="w-3 h-3 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
+                        <div className="w-3 h-3 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></div>
+                    </div>
+                    
+                    <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-left">
+                        <div className="flex items-start gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                            <div className="text-sm text-blue-800">
+                                <p className="font-medium">Hinweis</p>
+                                <p className="text-xs mt-1">
+                                    Das Fenster kann offen bleiben. Sie werden automatisch benachrichtigt, wenn Ihr Video fertig ist.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button
+                        onClick={() => {
+                            if (confirm('Möchten Sie den Vorgang wirklich abbrechen? Das Video wird dann nicht erstellt.')) {
+                                closeMergeModal();
+                            }
+                        }}
+                        className="mt-6 px-4 py-2 text-gray-500 hover:text-gray-700 text-sm"
+                    >
+                        Abbrechen
+                    </button>
+                </div>
+            )}
+            
+            {mergedVideoData.status === 'completed' && (
+                <>
+                    <div className="flex flex-col items-center mb-6">
+                        <div className="w-20 h-20 bg-gradient-to-br from-green-400 to-blue-500 rounded-full flex items-center justify-center mb-4 animate-bounce">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-12 h-12">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                            </svg>
+                        </div>
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                            🎉 Dein Video ist fertig!
+                        </h2>
+                        <p className="text-gray-600 text-center">
+                            {mergedVideoData.projectTitle || projectTitle || 'Dein Projekt'} wurde erfolgreich zusammengeführt
+                        </p>
+                    </div>
+                    
+                    {mergedVideoData.previewUrl && (
+                        <div className="mb-6">
+                            <div className="video-container border border-gray-300 rounded-lg overflow-hidden">
+                                <video 
+                                    controls 
+                                    src={mergedVideoData.previewUrl}
+                                    poster={mergedVideoData.thumbnailUrl}
+                                    className="w-full"
+                                />
+                            </div>
+                            {mergedVideoData.duration && (
+                                <p className="text-sm text-gray-500 mt-2 text-center">
+                                    Dauer: {Math.round(mergedVideoData.duration)}s
+                                </p>
+                            )}
+                        </div>
+                    )}
+                    
+                    <div className="space-y-3">
+                        <button
+                            onClick={downloadFinalVideo}
+
+                            className="w-full px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold text-lg flex items-center justify-center gap-3 shadow-lg hover:shadow-xl transition-all"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            Jetzt herunterladen
+                        </button>
+                        
+                        <button
+    onClick={() => {
+        closeMergeModal();
+        handleRestart();
+    }}
+    className="w-full px-4 py-2 text-gray-500 hover:text-gray-700 text-sm"
+>
+                            Fenster schließen (Achtung! Das Video wird gelöscht!)
+                        </button>
+                    </div>
+                </>
+            )}
+            
+            {mergedVideoData.status === 'error' && (
+                <div className="text-center">
+                    <div className="flex justify-center mb-6">
+                        <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-12 h-12 text-red-600">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="15" y1="9" x2="9" y2="15"></line>
+                                <line x1="9" y1="9" x2="15" y2="15"></line>
+                            </svg>
+                        </div>
+                    </div>
+                    
+                    <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                        Fehler beim Erstellen
+                    </h2>
+                    
+                    <p className="text-gray-600 mb-4">
+                        {mergedVideoData.message || 'Ein unerwarteter Fehler ist aufgetreten.'}
+                    </p>
+                    
+                    <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg text-left">
+                        <p className="text-sm text-red-800">
+                            <strong>Mögliche Ursachen:</strong>
+                        </p>
+                        <ul className="text-xs text-red-700 mt-2 list-disc list-inside space-y-1">
+                            <li>Die Video-Dateien konnten nicht verarbeitet werden</li>
+                            <li>Zeitüberschreitung (Timeout) nach 10 Minuten</li>
+                            <li>Verbindungsproblem zum Server</li>
+                        </ul>
+                    </div>
+                    
+                    <div className="space-y-3 mt-6">
+                        <button
+                            onClick={() => {
+                                closeMergeModal();
+                                setTimeout(() => mergeVideos(), 500);
+                            }}
+                            className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+                        >
+                            Nochmal versuchen
+                        </button>
+                        
+                        <button
+                            onClick={closeMergeModal}
+                            className="w-full px-4 py-2 text-gray-500 hover:text-gray-700 text-sm"
+                        >
+                            Schließen
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    </div>
+)}
+
+{/* Toast Notification */}
+{showToast && (
+    <div className="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in">
+        {toastMessage}
+    </div>
+)}
+
+{/* Musik Upload Modal */}
+{showMusicUploadModal && (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-md w-full p-6">
+            <h3 className="text-xl font-bold text-gray-900 mb-4">Eigene Musik hochladen</h3>
+            <p className="text-gray-600 mb-6">
+                Diese Funktion wird bald verfügbar sein. Sie können dann Ihre eigene Hintergrundmusik hochladen.
+            </p>
+            <button
+                onClick={() => setShowMusicUploadModal(false)}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            >
+                Verstanden
+            </button>
+        </div>
+    </div>
+)}
+
+{/* NEU: Restart Confirmation Modal */}
+{showRestartConfirmModal && (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <div className="flex items-start mb-4">
+                <div className="flex-shrink-0 w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mr-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-red-600">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                </div>
+                <div className="flex-1">
+                    <h3 className="text-lg font-bold text-gray-900 mb-2">
+                        Projekt wirklich zurücksetzen?
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                        Alle {scenes.length} Szenen und der Projekttitel werden unwiderruflich gelöscht. 
+                        Diese Aktion kann nicht rückgängig gemacht werden.
+                    </p>
+                </div>
+            </div>
+            
+            <div className="space-y-3 mt-6">
+                <button
+                    onClick={handleRestart}
+                    className="w-full px-4 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 font-medium"
+                >
+                    Ja, alles löschen und neu starten
+                </button>
+                
+                <button
+                    onClick={() => setShowRestartConfirmModal(false)}
+                    className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium"
+                >
+                    Abbrechen
+                </button>
+            </div>
+        </div>
+    </div>
+)}
+
+
+{/* NEU: AI-Assistent Modal */}
+{showAiModal && (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-2xl w-full p-8 shadow-xl">
+            <div className="flex justify-between items-start mb-6">
+                <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-pink-100 rounded-full flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-pink-600">
+    <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path>
+    <path d="M5 3v4"></path>
+    <path d="M19 17v4"></path>
+    <path d="M3 5h4"></path>
+    <path d="M17 19h4"></path>
+</svg>
+                    </div>
+                    <div>
+                        <h3 className="text-xl font-bold text-gray-900">KI-Assistent</h3>
+                        <p className="text-sm text-gray-500">Ihr intelligenter Video-Helfer</p>
+                    </div>
+                </div>
+                
+                <button
+                    onClick={() => setShowAiModal(false)}
+                    className="text-gray-400 hover:text-gray-600"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            
+            <div className="space-y-4">
+                {/* STEP 1: Dokumente hochladen */}
+                {aiWizardStep === 1 && (
+                    <>
+                        <div 
+                            className="border-2 border-dashed border-gray-300 rounded-lg p-12 text-center hover:border-blue-400 transition-colors cursor-pointer"
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                handleAiWizardFileUpload(e.dataTransfer.files);
+                            }}
+                            onDragOver={(e) => e.preventDefault()}
+                            onClick={() => document.getElementById('ai-wizard-file-input').click()}
+                        >
+                            <div className="flex flex-col items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-16 h-16 text-gray-400 mb-4">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
+                                <h3 className="text-lg font-semibold text-gray-900 mb-2">Quellen hochladen</h3>
+                                <p className="text-sm text-gray-600 mb-4">
+                                    Per Drag-and-drop hochladen oder Datei auswählen
+                                </p>
+                                <button className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium">
+                                    Datei auswählen
+                                </button>
+                                <p className="text-xs text-gray-500 mt-3">
+                                    Unterstützte Dateitypen: PDF, .doc, .docx
+                                </p>
+                            </div>
+                            <input
+                                id="ai-wizard-file-input"
+                                type="file"
+                                multiple
+                                accept=".pdf,.doc,.docx"
+                                onChange={(e) => handleAiWizardFileUpload(e.target.files)}
+                                className="hidden"
+                            />
+                        </div>
+                        
+                        {/* Dateiliste */}
+                        {aiWizardFiles.length > 0 && (
+                            <div className="mt-4 space-y-2">
+                                <p className="text-sm font-medium text-gray-700">
+                                    Hochgeladene Dokumente ({aiWizardFiles.length}/5):
+                                </p>
+                                {aiWizardFiles.map((file, index) => (
+                                    <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-md border border-gray-200">
+                                        <div className="flex items-center gap-3">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-gray-500">
+                                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                                <polyline points="14 2 14 8 20 8"></polyline>
+                                            </svg>
+                                            <div>
+                                                <p className="text-sm font-medium text-gray-900">{file.name}</p>
+                                                <p className="text-xs text-gray-500">{(file.size / 1024).toFixed(1)} KB</p>
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                removeAiWizardFile(index);
+                                            }}
+                                            className="text-red-500 hover:text-red-700"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </>
+                )}
+                
+                {/* STEP 2: Texteingabe */}
+                {aiWizardStep === 2 && (
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Worum soll es in Ihrem Video gehen? Was ist besonders wichtig? Wie soll formuliert werden?
+                            </label>
+                            <textarea
+                                value={aiWizardPrompt}
+                                onChange={(e) => setAiWizardPrompt(e.target.value)}
+                                className="w-full p-3 border border-gray-300 rounded-md h-40 resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                placeholder="Beschreiben Sie hier Ihr gewünschtes Video..."
+                                disabled={aiWizardLoading}
+                            />
+                        </div>
+                        
+                        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                            <div className="flex items-start gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                                </svg>
+                                <div className="text-sm text-blue-800">
+                                    <p className="font-medium mb-1">Tipp</p>
+                                    <p>Je genauer Sie Ihre Anforderungen beschreiben, desto besser wird der KI-Vorschlag. Erwähnen Sie Zielgruppe, Tonalität und wichtige Kernbotschaften.</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <button
+                            onClick={submitAiWizard}
+                            disabled={!aiWizardPrompt.trim() || aiWizardLoading}
+                            className="w-full px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-md hover:from-purple-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
+                        >
+                            {aiWizardLoading ? (
+                                <>
+                                    <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Vorschlag wird generiert...
+                                </>
+                            ) : (
+                                <>
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                                        <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path>
+                                        <path d="M5 3v4"></path>
+                                        <path d="M19 17v4"></path>
+                                        <path d="M3 5h4"></path>
+                                        <path d="M17 19h4"></path>
+                                    </svg>
+                                    Vorschlag generieren
+                                </>
+                            )}
+                        </button>
+                    </div>
+                )}
+            </div>
+            
+            <div className="flex justify-end gap-3 mt-6">
+                {aiWizardStep === 2 && (
+                    <button
+                        onClick={() => setAiWizardStep(1)}
+                        disabled={aiWizardLoading}
+                        className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium disabled:opacity-50"
+                    >
+                        Zurück
+                    </button>
+                )}
+                
+                <button
+                    onClick={() => {
+                        setShowAiModal(false);
+                        resetAiWizard();
+                    }}
+                    disabled={aiWizardLoading}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium disabled:opacity-50"
+                >
+                    Abbrechen
+                </button>
+                
+                {aiWizardStep === 1 && (
+                    <button
+                        onClick={() => setAiWizardStep(2)}
+                        disabled={aiWizardFiles.length === 0}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Weiter
+                    </button>
+                )}
+            </div>
+        </div>
+    </div>
+)}
+
+{/* Color Picker Modal */}
+{showColorPicker && (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-sm w-full p-6 shadow-xl">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">
+                {showColorPicker === 'primary' ? 'Primärfarbe' : 'Sekundärfarbe'} wählen
+            </h3>
+            
+            <div className="space-y-4">
+                {/* Color Preview */}
+                <div className="flex items-center gap-4">
+                    <div 
+                        className="w-20 h-20 rounded-lg border-2 border-gray-300"
+                        style={{ backgroundColor: tempColor }}
+                    ></div>
+                    <div className="flex-1">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Hex-Code</label>
+                        <input
+                            type="text"
+                            value={tempColor}
+                            onChange={(e) => {
+                                let value = e.target.value;
+                                if (!value.startsWith('#')) value = '#' + value;
+                                setTempColor(value);
+                            }}
+                            className="w-full p-2 border border-gray-300 rounded-md font-mono text-sm"
+                            placeholder="#000000"
+                            maxLength={7}
+                        />
+                    </div>
+                </div>
+                
+                {/* Native Color Picker */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Farbauswahl</label>
+                    <input
+                        type="color"
+                        value={tempColor}
+                        onChange={(e) => setTempColor(e.target.value)}
+                        className="w-full h-12 rounded border border-gray-300 cursor-pointer"
+                    />
+                </div>
+            </div>
+            
+            {/* Buttons */}
+            <div className="flex gap-3 mt-6">
+                <button
+                    onClick={() => {
+                        setShowColorPicker(null);
+                        setTempColor('');
+                    }}
+                    className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium"
+                >
+                    Abbrechen
+                </button>
+                <button
+                    onClick={() => {
+    if (showColorPicker === 'primary') {
+        setLocalPrimaryColor(tempColor);
+    } else {
+        setLocalSecondaryColor(tempColor);
+    }
+    setShowColorPicker(null);
+    setTempColor('');
+}}
+                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium"
+                >
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
+)}
+
+{/* NEU: Edit Confirm Modal */}
+{showEditConfirmModal && (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            {(() => {
+                const scene = scenes.find(s => s.id === showEditConfirmModal);
+                const isUpload = scene?.type === 'upload';
+                
+                return (
+                    <>
+                        <div className="flex items-start mb-4">
+                            <div className="flex-shrink-0 w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center mr-4">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6 text-yellow-600">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                                </svg>
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="text-lg font-bold text-gray-900 mb-2">
+                                    {isUpload ? 'Neues Video hochladen?' : 'Video neu generieren?'}
+                                </h3>
+                                <p className="text-sm text-gray-600">
+                                    {isUpload 
+                                        ? 'Möchten Sie ein neues Video hochladen? Das aktuelle Video wird dabei ersetzt.'
+                                        : 'Bitte laden Sie das Video herunter, wenn Sie es behalten möchten. Nach erneuter Bearbeitung ist ein Aufruf dieses Videos nicht mehr möglich.'
+                                    }
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div className="space-y-3 mt-6">
+                            {/* Download Button - NUR für nicht-Upload Szenen */}
+                            {!isUpload && (
+                                <button
+                                    onClick={() => downloadAndCloseModal(showEditConfirmModal)}
+                                    className="w-full px-4 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="7 10 12 15 17 10"></polyline>
+                                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                                    </svg>
+                                    Video herunterladen
+                                </button>
+                            )}
+                            
+                            {/* Ja Button */}
+                            <button
+                                onClick={() => confirmRegenerate(showEditConfirmModal)}
+                                className="w-full px-4 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 font-medium"
+                            >
+                                {isUpload ? 'Ja, neues Video hochladen' : 'Ja, neu generieren'}
+                            </button>
+                            
+                            {/* Abbrechen Button */}
+                            <button
+                                onClick={() => setShowEditConfirmModal(null)}
+                                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 font-medium"
+                            >
+                                Nein, abbrechen
+                            </button>
+                        </div>
+                    </>
+                );
+            })()}
+        </div>
+    </div>
+)}
+
+     
+                </div>
+            );
+        }
+
+        createRoot(document.getElementById('root')).render(<VideoGeneratorApp />);
+    </script>
+</body>
+</html>
